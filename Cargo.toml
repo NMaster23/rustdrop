@@ -1,0 +1,10 @@
+[package]
+name = "rustdrop"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-std = "1.13.2"
+futures-util = "0.3.32"
+mdns = "3.0.0"
+mdns-sd = "0.19.1"
