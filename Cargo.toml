@@ -5,6 +5,13 @@ edition = "2024"
 
 [dependencies]
 async-std = "1.13.2"
+bluest = "0.6.9"
 futures-util = "0.3.32"
+io = "0.0.2"
+local-ip-address = "0.6.12"
 mdns = "3.0.0"
 mdns-sd = "0.19.1"
+slint = "1.16.1"
+
+[build-dependencies]
+slint-build = "1.16.1"

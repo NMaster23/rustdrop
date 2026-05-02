@@ -1,0 +1,30 @@
+import { Button, VerticalBox } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    width: 600px;
+    height: 600px;
+    in-out property <bool> blue_or_wifi;
+    in-out property <bool> mode_select: true;
+
+    callback send_mode(bool);
+    
+    if mode_select:
+        HorizontalLayout {    
+            Button {
+                text: "Bluetooth";
+                clicked => {
+                    blue_or_wifi = true;
+                    send_mode(blue_or_wifi);
+                    mode_select = false;
+                }
+            }
+            Button {
+                text: "Wi-Fi";
+                clicked => {
+                    blue_or_wifi = false;
+                    send_mode(blue_or_wifi);
+                    mode_select = false;
+                }
+            }
+        }
+}
