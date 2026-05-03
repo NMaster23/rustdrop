@@ -5,12 +5,19 @@ struct WifiDevice {
     ip: string,
 }
 
+struct BlueDevice {
+    identifier: string,
+}
+
 export component AppWindow inherits Window {
     width: 600px;
     height: 600px;
     in-out property <bool> blue_or_wifi;
     in-out property <bool> mode_select: true;
+    in-out property <bool> wifi_scan_menu: false;
+    in-out property <bool> blue_scan_menu: false;
     in-out property <[WifiDevice]> wifi_devices: [];
+    in-out property <[BlueDevice]> blue_devices: [];
 
     callback send_mode(bool);
     callback send_scan(bool);
@@ -24,6 +31,7 @@ export component AppWindow inherits Window {
                     blue_or_wifi = true;
                     send_mode(blue_or_wifi);
                     mode_select = false;
+                    blue_scan_menu = true;
                 }
             }
             Button {
@@ -32,29 +40,34 @@ export component AppWindow inherits Window {
                     blue_or_wifi = false;
                     send_mode(blue_or_wifi);
                     mode_select = false;
+                    wifi_scan_menu = true;
                 }
             }
         }
-    if (!mode_select && blue_or_wifi):
-        Button {
-            text: "Scan";
-            clicked => {
-                send_scan(true);
-                let scan_menu = true;
-                let blue_or_wifi = false;
-            }
-        }
-    if (!mode_select): ScrollView {
+    if (wifi_scan_menu): ScrollView {
         VerticalLayout {
             spacing: 5px;
             for device[i] in wifi_devices: Button {
                 height: 40px;
                 text: device.name + " (" + device.ip + ") ";
                 clicked => {
-                    self.text = "Enter File Path";
+                    self.text = "File Sent Successfully";
                     send_select_device(device.ip);
                 }
             }
         }
     }
+    if (blue_scan_menu): ScrollView {
+        VerticalLayout {
+            spacing: 5px;
+            for device[i] in blue_devices: Button {
+                height: 40px;
+                text: device.identifier;
+                clicked => {
+                    self.text = "File Sent Successfully";
+                }
+            }
+        }
+    }
+
 }

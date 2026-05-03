@@ -1,12 +1,9 @@
-use mdns::resolve;
 use mdns_sd::{ServiceDaemon, ServiceInfo, ServiceEvent};
 use async_std::stream::StreamExt;
 use mdns_sd::Error;
 use bluest::*;
 use local_ip_address::local_ip;
-use slint::{SharedString, VecModel};
-use std::collections::HashMap;
-use std::fmt::format;
+use slint::SharedString;
 use std::net::{TcpListener, TcpStream};
 use std::fs::File;
 use std::io;
@@ -57,7 +54,7 @@ fn receive_file_wifi() {
     }
 }
 
-async fn bluetooth() {
+async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
     let adapter = Adapter::default().await.ok_or("Bluetooth adapter not found").unwrap();
         adapter.wait_available().await.unwrap();
         println!("starting scan");
@@ -69,7 +66,16 @@ async fn bluetooth() {
                 signal_strength: discovered_device.rssi.map(|x| format!(" ({}dBm)", x)).unwrap_or_default(),
                 service_uuid: discovered_device.adv_data.services
             };
-            println!("{}", blue_data.identifier);
+            ui_handle.upgrade_in_event_loop(move |ui| {
+                let mut devices: Vec<BlueDevice> = ui.get_blue_devices().iter().collect();
+                let identifier = blue_data.identifier.into();
+                if let Some(pos) = devices.iter().position(|d| d.identifier == identifier) {
+                    devices[pos] = BlueDevice { identifier }
+                } else {
+                    devices.push(BlueDevice { identifier })
+                }
+                ui.set_blue_devices(slint::ModelRc::from(Rc::new(slint::VecModel::from(devices))));
+            }).unwrap();
         }
 }
 
@@ -120,13 +126,6 @@ async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>) {
             send_file_wifi(device_ip.to_string(), 5200, &path_str);
         });
     });
-//    println!("Enter file path to send:");
-//    let mut file_path = String::new();
-//   io::stdin().read_line(&mut file_path).expect("failed to readline");
- //  println!("Enter target IP address:");
-//    let mut ip_addr = String::new();
-//    io::stdin().read_line(&mut ip_addr).expect("failed to readline");
-//    send_file_wifi(ip_addr.trim().to_string(), 5200, file_path.trim());
 }
 
 #[async_std::main]
@@ -136,7 +135,8 @@ async fn main() -> Result<(), Error> {
     let ui_clone = ui.as_weak();
     ui.on_send_mode(move |blue_or_wifi: bool| {
         if blue_or_wifi {
-            async_std::task::spawn(bluetooth());
+            let blue_ui = ui_clone.clone();
+            async_std::task::spawn(bluetooth(blue_ui));
         }
         if !blue_or_wifi {
             let mdns_clone = mdns.clone();
