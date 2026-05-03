@@ -6,11 +6,13 @@ use bluest::*;
 use local_ip_address::local_ip;
 use slint::{SharedString, VecModel};
 use std::collections::HashMap;
+use std::fmt::format;
 use std::net::{TcpListener, TcpStream};
 use std::fs::File;
 use std::io;
 use slint::Model;
 use std::rc::Rc;
+use rfd::FileDialog;
 
 slint::include_modules!();
 
@@ -90,13 +92,14 @@ async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>) {
     async_std::task::spawn(async move {
         receive_file_wifi();
     });
+    let ui_handle_clone = ui_handle.clone();
     async_std::task::spawn(async move {
         while let Ok(event) = receiver.recv() {
             if let ServiceEvent::ServiceResolved(resolved) = event {
                 println!("Resolved a new service: {}", resolved.fullname);
                 let name = resolved.get_hostname().to_string();
                 let ip = resolved.get_addresses().into_iter().map(|a| a.to_string()).next().unwrap_or_default();
-                ui_handle.upgrade_in_event_loop(move |ui| {
+                ui_handle_clone.upgrade_in_event_loop(move |ui| {
                     let mut devices: Vec<WifiDevice> = ui.get_wifi_devices().iter().collect();
                     devices.push(WifiDevice {
                         name: name.into(),
@@ -105,8 +108,18 @@ async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>) {
                     ui.set_wifi_devices(slint::ModelRc::from(Rc::new(slint::VecModel::from(devices))));
                 }).unwrap();
             }
-            }
+        }
+    });
+    let ui_handle_request = ui_handle.clone();
+    ui_handle.upgrade_in_event_loop(move |ui| {
+        ui.on_send_select_device(move |device_ip: SharedString| {
+            let file = FileDialog::new()
+                .set_directory("/")
+                .pick_file();
+            let path_str = file.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+            send_file_wifi(device_ip.to_string(), 5200, &path_str);
         });
+    });
 //    println!("Enter file path to send:");
 //    let mut file_path = String::new();
 //   io::stdin().read_line(&mut file_path).expect("failed to readline");
