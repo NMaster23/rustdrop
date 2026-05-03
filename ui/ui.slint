@@ -1,14 +1,22 @@
-import { Button, VerticalBox } from "std-widgets.slint";
+import { Button, VerticalBox, ScrollView } from "std-widgets.slint";
+
+struct WifiDevice {
+    name: string,
+    ip: string,
+}
 
 export component AppWindow inherits Window {
     width: 600px;
     height: 600px;
     in-out property <bool> blue_or_wifi;
     in-out property <bool> mode_select: true;
+    in-out property <[WifiDevice]> wifi_devices: [];
 
     callback send_mode(bool);
+    callback send_scan(bool);
+    callback send_select_device(string);
     
-    if mode_select:
+    if (mode_select):
         HorizontalLayout {    
             Button {
                 text: "Bluetooth";
@@ -27,4 +35,26 @@ export component AppWindow inherits Window {
                 }
             }
         }
+    if (!mode_select && blue_or_wifi):
+        Button {
+            text: "Scan";
+            clicked => {
+                send_scan(true);
+                let scan_menu = true;
+                let blue_or_wifi = false;
+            }
+        }
+    if (!mode_select): ScrollView {
+        VerticalLayout {
+            spacing: 5px;
+            for device[i] in wifi_devices: Button {
+                height: 40px;
+                text: device.name + " (" + device.ip + ") ";
+                clicked => {
+                    self.text = "Enter File Path";
+                    send_select_device(device.ip);
+                }
+            }
+        }
+    }
 }
