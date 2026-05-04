@@ -21,7 +21,8 @@ export component AppWindow inherits Window {
 
     callback send_mode(bool);
     callback send_scan(bool);
-    callback send_select_device(string);
+    callback send_select_device_wifi(string);
+    callback send_select_device_blue(string);
     
     if (mode_select):
         HorizontalLayout {    
@@ -52,7 +53,7 @@ export component AppWindow inherits Window {
                 text: device.name + " (" + device.ip + ") ";
                 clicked => {
                     self.text = "File Sent Successfully";
-                    send_select_device(device.ip);
+                    send_select_device_wifi(device.ip);
                 }
             }
         }
@@ -64,10 +65,10 @@ export component AppWindow inherits Window {
                 height: 40px;
                 text: device.identifier;
                 clicked => {
-                    self.text = "File Sent Successfully";
+                    self.text = "Pairing";
+                    send_select_device_blue(device.identifier);
                 }
             }
         }
     }
-
 }

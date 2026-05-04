@@ -6,10 +6,11 @@ use local_ip_address::local_ip;
 use slint::SharedString;
 use std::net::{TcpListener, TcpStream};
 use std::fs::File;
-use std::io;
+use std::io::{self, Write};
 use slint::Model;
 use std::rc::Rc;
 use rfd::FileDialog;
+use std::io::Read;
 
 slint::include_modules!();
 
@@ -24,6 +25,8 @@ fn send_file_wifi(ip: String, port: u32, file_path: &str) {
     if let Ok(mut stream) = TcpStream::connect(&addr) {
         println!("Connected to the server!");
         if let Ok(mut file) = File::open(file_path) {
+            let name_bytes = std::path::Path::new(file_path).file_name().unwrap().to_str().unwrap().as_bytes();
+            stream.write_all(name_bytes);
             match io::copy(&mut file, &mut stream) {
                 Ok(bytes) => println!("Sent {} bytes successfully", bytes),
                 Err(e) => println!("Failed to send file: {}", e),
@@ -43,7 +46,8 @@ fn receive_file_wifi() {
         match listener.accept() {
             Ok((mut socket, addr)) => {
                 println!("Incoming file from: {addr:?}");
-                let mut file = File::create("received_file.part").unwrap();
+                let filename = String::from_utf8({ let mut buf = vec![0; (&mut socket).bytes().next().unwrap().unwrap() as usize]; socket.read_exact(&mut buf).unwrap(); buf }).unwrap();
+                let mut file = File::create(filename).unwrap();
                 match io::copy(&mut socket, &mut file) {
                     Ok(bytes) => println!("Received {} bytes and saved to 'received_file.part'", bytes),
                     Err(e) => println!("Error during reception: {}", e),
@@ -60,13 +64,14 @@ async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
         println!("starting scan");
         let mut scan = adapter.scan(&[]).await.unwrap();
         println!("scan started");
+        let ui_handle_clone = ui_handle.clone();
         while let Some(discovered_device) = scan.next().await {
             let blue_data = BlueData {
                 identifier: discovered_device.device.name().as_deref().unwrap_or("(unknown)").to_string(),
                 signal_strength: discovered_device.rssi.map(|x| format!(" ({}dBm)", x)).unwrap_or_default(),
                 service_uuid: discovered_device.adv_data.services
             };
-            ui_handle.upgrade_in_event_loop(move |ui| {
+            ui_handle_clone.upgrade_in_event_loop(move |ui| {
                 let mut devices: Vec<BlueDevice> = ui.get_blue_devices().iter().collect();
                 let identifier = blue_data.identifier.into();
                 if let Some(pos) = devices.iter().position(|d| d.identifier == identifier) {
@@ -77,6 +82,15 @@ async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
                 ui.set_blue_devices(slint::ModelRc::from(Rc::new(slint::VecModel::from(devices))));
             }).unwrap();
         }
+        let ui_handle_request = ui_handle.clone();
+        ui_handle_request.upgrade_in_event_loop(move |ui| {
+            ui.on_send_select_device_blue(move |identifier: SharedString| {
+                let file = FileDialog::new()
+                .set_directory("/")
+                .pick_file();
+                let path_str = file.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+            });
+        });
 }
 
 async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>) {
@@ -118,7 +132,7 @@ async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>) {
     });
     let ui_handle_request = ui_handle.clone();
     ui_handle.upgrade_in_event_loop(move |ui| {
-        ui.on_send_select_device(move |device_ip: SharedString| {
+        ui.on_send_select_device_wifi(move |device_ip: SharedString| {
             let file = FileDialog::new()
                 .set_directory("/")
                 .pick_file();
