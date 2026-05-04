@@ -25,8 +25,7 @@ fn send_file_wifi(ip: String, port: u32, file_path: &str) {
     if let Ok(mut stream) = TcpStream::connect(&addr) {
         println!("Connected to the server!");
         if let Ok(mut file) = File::open(file_path) {
-            let name_bytes = std::path::Path::new(file_path).file_name().unwrap().to_str().unwrap().as_bytes();
-            stream.write_all(name_bytes);
+            let n = std::path::Path::new(file_path).file_name().unwrap().to_str().unwrap().as_bytes(); stream.write_all(&[n.len() as u8]).unwrap(); stream.write_all(n).unwrap();
             match io::copy(&mut file, &mut stream) {
                 Ok(bytes) => println!("Sent {} bytes successfully", bytes),
                 Err(e) => println!("Failed to send file: {}", e),
@@ -46,10 +45,10 @@ fn receive_file_wifi() {
         match listener.accept() {
             Ok((mut socket, addr)) => {
                 println!("Incoming file from: {addr:?}");
-                let filename = String::from_utf8({ let mut buf = vec![0; (&mut socket).bytes().next().unwrap().unwrap() as usize]; socket.read_exact(&mut buf).unwrap(); buf }).unwrap();
+                let filename = String::from_utf8({ let mut b = vec![0u8; (&mut socket).bytes().next().unwrap().unwrap() as usize]; socket.read_exact(&mut b).unwrap(); b }).unwrap();
                 let mut file = File::create(filename).unwrap();
                 match io::copy(&mut socket, &mut file) {
-                    Ok(bytes) => println!("Received {} bytes and saved to 'received_file.part'", bytes),
+                    Ok(bytes) => println!("Received {} bytes and saved to '{}'", bytes, filename),
                     Err(e) => println!("Error during reception: {}", e),
                 }
             }
