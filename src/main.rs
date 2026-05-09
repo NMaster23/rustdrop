@@ -11,7 +11,8 @@ use slint::Model;
 use std::rc::Rc;
 use rfd::FileDialog;
 use std::io::Read;
-use chunked_transfer::Encoder;
+use chunked_transfer::{Encoder, Decoder};
+use tokio::runtime::{Builder, Runtime};
 
 slint::include_modules!();
 
@@ -28,11 +29,12 @@ fn send_file_wifi(ip: String, port: u32, file_path: &str) {
         if let Ok(mut file) = File::open(file_path) {
             let mut decoded = std::path::Path::new(file_path).file_name().unwrap().to_str().unwrap().as_bytes();
             let mut encoded: Vec<u8> = vec![];
-            let encoded_send = encoded.clone();
-            let mut encoder = Encoder::with_chunks_size(&mut encoded, 5);
-            encoder.write_all(decoded);
-            stream.write_all(&[decoded.len() as u8]).unwrap();
-            stream.write_all(&encoded_send).unwrap();
+            {
+                let mut encoder = Encoder::with_chunks_size(&mut encoded, 5);
+                encoder.write_all(decoded);
+            }
+            stream.write_all(&[encoded.len() as u8]).unwrap();
+            stream.write_all(&encoded).unwrap();
             match io::copy(&mut file, &mut stream) {
                 Ok(bytes) => {
                     println!("Sent {} bytes successfully", bytes); 
@@ -55,9 +57,13 @@ fn receive_file_wifi() {
         match listener.accept() {
             Ok((mut socket, addr)) => {
                 println!("Incoming file from: {addr:?}");
-                let filename = String::from_utf8({ let mut b = vec![0u8; (&mut socket).bytes().next().unwrap().unwrap() as usize]; socket.read_exact(&mut b).unwrap(); b }).unwrap();
+                let mut filename = "File.file";
                 let file_name = filename.clone();
                 let mut file = File::create(filename).unwrap();
+                let mut encoded = vec![];
+                let mut decoded = String::new();
+                let mut decoder = Decoder::new(&encoded as &[u8]);
+                decoder.read_to_string(&mut decoded);
                 match io::copy(&mut socket, &mut file) {
                     Ok(bytes) => println!("Received {} bytes and saved to '{}'", bytes, file_name),
                     Err(e) => println!("Error during reception: {}", e),
@@ -103,7 +109,7 @@ async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
         });
 }
 
-async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>) {
+async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>, bg_thread: Runtime) {
     let service_type = "_rustdrop._tcp.local.";
     let instance_name = "rustdrop";
     let host_name = "rustdrop.local.";
@@ -119,11 +125,11 @@ async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>) {
         None,
     ).unwrap();
     mdns.register(rustdrop_service).expect("Failed to register our service");
-    async_std::task::spawn(async move {
+    bg_thread.spawn(async move {
         receive_file_wifi();
     });
     let ui_handle_clone = ui_handle.clone();
-    async_std::task::spawn(async move {
+    bg_thread.spawn(async move {
         while let Ok(event) = receiver.recv() {
             if let ServiceEvent::ServiceResolved(resolved) = event {
                 println!("Resolved a new service: {}", resolved.fullname);
@@ -141,13 +147,15 @@ async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>) {
         }
     });
     let ui_handle_request = ui_handle.clone();
-    ui_handle.upgrade_in_event_loop(move |ui| {
+    bg_thread.spawn(async move {
+        ui_handle.upgrade_in_event_loop(move |ui| {
         ui.on_send_select_device_wifi(move |device_ip: SharedString| {
             let file = FileDialog::new()
                 .set_directory("/")
                 .pick_file();
             let path_str = file.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
             send_file_wifi(device_ip.to_string(), 5200, &path_str);
+            });
         });
     });
 }
@@ -155,6 +163,12 @@ async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>) {
 #[async_std::main]
 async fn main() -> Result<(), Error> {
     let ui = AppWindow::new().unwrap();
+    let runtime = Builder::new_multi_thread()
+        .worker_threads(4)
+        .thread_name("my-custom-name")
+        .thread_stack_size(3 * 1024 * 1024)
+        .build()
+        .unwrap();
     let mdns = ServiceDaemon::new().expect("Failed to create daemon");
     let ui_clone = ui.as_weak();
     ui.on_send_mode(move |blue_or_wifi: bool| {
@@ -165,7 +179,15 @@ async fn main() -> Result<(), Error> {
         if !blue_or_wifi {
             let mdns_clone = mdns.clone();
             let wifi_ui = ui_clone.clone();
-            async_std::task::spawn(wifi(mdns_clone, wifi_ui));
+            runtime.spawn(async move {
+                let file_thread = Builder::new_multi_thread()
+                    .worker_threads(4)
+                    .thread_name("my-custom-name")
+                    .thread_stack_size(3 * 1024 * 1024)
+                    .build()
+                    .unwrap();
+                async_std::task::block_on(wifi(mdns_clone, wifi_ui, file_thread));    
+            });
         }
     });
     ui.run().expect("UI Initialization Error");
