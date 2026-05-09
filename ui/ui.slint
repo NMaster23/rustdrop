@@ -18,6 +18,7 @@ export component AppWindow inherits Window {
     in-out property <bool> blue_scan_menu: false;
     in-out property <[WifiDevice]> wifi_devices: [];
     in-out property <[BlueDevice]> blue_devices: [];
+    in-out property <bool> sending_file;
 
     callback send_mode(bool);
     callback send_scan(bool);

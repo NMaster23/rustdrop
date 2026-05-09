@@ -57,15 +57,22 @@ fn receive_file_wifi() {
         match listener.accept() {
             Ok((mut socket, addr)) => {
                 println!("Incoming file from: {addr:?}");
-                let mut filename = "File.file";
-                let file_name = filename.clone();
-                let mut file = File::create(filename).unwrap();
+                let mut len_buf = [0u8; 1];
+                socket.read_exact(&mut len_buf);
+                let len = len_buf[0] as usize;
+                let mut filename_buf = vec![0u8; len];
+                socket.read_exact(&mut filename_buf);
+                let mut filename = String::new();
                 let mut encoded = vec![];
                 let mut decoded = String::new();
+                let mut filename_u8 = &filename_buf as &[u8];
+                let mut filename_decoder = Decoder::new(&mut filename_u8);
+                filename_decoder.read_to_string(&mut filename);
+                let mut file = File::create(filename).unwrap();
                 let mut decoder = Decoder::new(&encoded as &[u8]);
                 decoder.read_to_string(&mut decoded);
                 match io::copy(&mut socket, &mut file) {
-                    Ok(bytes) => println!("Received {} bytes and saved to '{}'", bytes, file_name),
+                    Ok(bytes) => println!("Received {} bytes and saved to ", bytes),
                     Err(e) => println!("Error during reception: {}", e),
                 }
             }
