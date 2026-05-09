@@ -11,6 +11,7 @@ use slint::Model;
 use std::rc::Rc;
 use rfd::FileDialog;
 use std::io::Read;
+use chunked_transfer::Encoder;
 
 slint::include_modules!();
 
@@ -25,9 +26,18 @@ fn send_file_wifi(ip: String, port: u32, file_path: &str) {
     if let Ok(mut stream) = TcpStream::connect(&addr) {
         println!("Connected to the server!");
         if let Ok(mut file) = File::open(file_path) {
-            let n = std::path::Path::new(file_path).file_name().unwrap().to_str().unwrap().as_bytes(); stream.write_all(&[n.len() as u8]).unwrap(); stream.write_all(n).unwrap();
+            let mut decoded = std::path::Path::new(file_path).file_name().unwrap().to_str().unwrap().as_bytes();
+            let mut encoded: Vec<u8> = vec![];
+            let encoded_send = encoded.clone();
+            let mut encoder = Encoder::with_chunks_size(&mut encoded, 5);
+            encoder.write_all(decoded);
+            stream.write_all(&[decoded.len() as u8]).unwrap();
+            stream.write_all(&encoded_send).unwrap();
             match io::copy(&mut file, &mut stream) {
-                Ok(bytes) => println!("Sent {} bytes successfully", bytes),
+                Ok(bytes) => {
+                    println!("Sent {} bytes successfully", bytes); 
+                    stream.shutdown(std::net::Shutdown::Both);
+                }
                 Err(e) => println!("Failed to send file: {}", e),
             }
         } else {
@@ -46,9 +56,10 @@ fn receive_file_wifi() {
             Ok((mut socket, addr)) => {
                 println!("Incoming file from: {addr:?}");
                 let filename = String::from_utf8({ let mut b = vec![0u8; (&mut socket).bytes().next().unwrap().unwrap() as usize]; socket.read_exact(&mut b).unwrap(); b }).unwrap();
+                let file_name = filename.clone();
                 let mut file = File::create(filename).unwrap();
                 match io::copy(&mut socket, &mut file) {
-                    Ok(bytes) => println!("Received {} bytes and saved to '{}'", bytes, filename),
+                    Ok(bytes) => println!("Received {} bytes and saved to '{}'", bytes, file_name),
                     Err(e) => println!("Error during reception: {}", e),
                 }
             }
