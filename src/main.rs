@@ -12,7 +12,7 @@ use std::rc::Rc;
 use rfd::FileDialog;
 use std::io::Read;
 use chunked_transfer::{Encoder, Decoder};
-use tokio::runtime::{Builder, Runtime};
+use std::thread;
 
 slint::include_modules!();
 
@@ -109,7 +109,7 @@ async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
         });
 }
 
-async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>, bg_thread: Runtime) {
+async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>) {
     let service_type = "_rustdrop._tcp.local.";
     let instance_name = "rustdrop";
     let host_name = "rustdrop.local.";
@@ -125,11 +125,11 @@ async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>, bg_thread:
         None,
     ).unwrap();
     mdns.register(rustdrop_service).expect("Failed to register our service");
-    bg_thread.spawn(async move {
+    async_std::task::spawn(async move {
         receive_file_wifi();
     });
     let ui_handle_clone = ui_handle.clone();
-    bg_thread.spawn(async move {
+    async_std::task::spawn(async move {
         while let Ok(event) = receiver.recv() {
             if let ServiceEvent::ServiceResolved(resolved) = event {
                 println!("Resolved a new service: {}", resolved.fullname);
@@ -147,15 +147,13 @@ async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>, bg_thread:
         }
     });
     let ui_handle_request = ui_handle.clone();
-    bg_thread.spawn(async move {
-        ui_handle.upgrade_in_event_loop(move |ui| {
+    ui_handle.upgrade_in_event_loop(move |ui| {
         ui.on_send_select_device_wifi(move |device_ip: SharedString| {
             let file = FileDialog::new()
                 .set_directory("/")
                 .pick_file();
             let path_str = file.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
             send_file_wifi(device_ip.to_string(), 5200, &path_str);
-            });
         });
     });
 }
@@ -163,12 +161,6 @@ async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>, bg_thread:
 #[async_std::main]
 async fn main() -> Result<(), Error> {
     let ui = AppWindow::new().unwrap();
-    let runtime = Builder::new_multi_thread()
-        .worker_threads(4)
-        .thread_name("my-custom-name")
-        .thread_stack_size(3 * 1024 * 1024)
-        .build()
-        .unwrap();
     let mdns = ServiceDaemon::new().expect("Failed to create daemon");
     let ui_clone = ui.as_weak();
     ui.on_send_mode(move |blue_or_wifi: bool| {
@@ -179,15 +171,7 @@ async fn main() -> Result<(), Error> {
         if !blue_or_wifi {
             let mdns_clone = mdns.clone();
             let wifi_ui = ui_clone.clone();
-            runtime.spawn(async move {
-                let file_thread = Builder::new_multi_thread()
-                    .worker_threads(4)
-                    .thread_name("my-custom-name")
-                    .thread_stack_size(3 * 1024 * 1024)
-                    .build()
-                    .unwrap();
-                async_std::task::block_on(wifi(mdns_clone, wifi_ui, file_thread));    
-            });
+            async_std::task::spawn(wifi(mdns_clone, wifi_ui));
         }
     });
     ui.run().expect("UI Initialization Error");
