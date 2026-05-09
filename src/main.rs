@@ -13,7 +13,7 @@ use rfd::FileDialog;
 use std::io::Read;
 use chunked_transfer::{Encoder, Decoder};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 slint::include_modules!();
 
@@ -82,13 +82,26 @@ fn receive_file_wifi() {
 
 async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
     let adapter = Arc::new(Adapter::default().await.ok_or("Bluetooth adapter not found").unwrap());
-    let adapter_clone = Arc::clone(&adapter);
+    let adapter_ui = Arc::clone(&adapter);
     adapter.wait_available().await.unwrap();
     println!("starting scan");
     let mut scan = adapter.scan(&[]).await.unwrap();
     println!("scan started");
     let ui_handle_clone = ui_handle.clone();
-    let mut identifier_name: HashMap<String, Device>= HashMap::new();
+    let mut identifier_name = Arc::new(Mutex::new(HashMap::<String, Device>::new()));
+    let identifier_name_ui = Arc::clone(&identifier_name);
+    let ui_handle_request = ui_handle.clone();
+    let _ = ui_handle_request.upgrade_in_event_loop(move |ui| {
+        ui.on_send_select_device_blue(move |identifier: SharedString| {
+            let device = &identifier_name_ui.lock().unwrap()[&identifier.to_string()].clone();
+            let file = FileDialog::new()
+                .set_directory("/")
+                .pick_file();
+            let path_str = file.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+            adapter_ui.connect_device(device);
+            println!("Connected to {}", identifier.to_string());
+        });
+    });
     while let Some(discovered_device) = scan.next().await {
         let blue_data = BlueData {
             identifier: discovered_device.device.name().as_deref().unwrap_or("(unknown)").to_string(),
@@ -96,7 +109,8 @@ async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
             service_uuid: discovered_device.adv_data.services
         };
         let hashmap_identifier = discovered_device.device.clone();
-        identifier_name.insert(blue_data.identifier.clone(), hashmap_identifier);
+        let mut hashmap = identifier_name.lock().unwrap();
+        hashmap.insert(blue_data.identifier.clone(), hashmap_identifier);
         ui_handle_clone.upgrade_in_event_loop(move |ui| {
             let mut devices: Vec<BlueDevice> = ui.get_blue_devices().iter().collect();
             let identifier = blue_data.identifier.into();
@@ -108,18 +122,6 @@ async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
             ui.set_blue_devices(slint::ModelRc::from(Rc::new(slint::VecModel::from(devices))));
         }).unwrap();
     }
-    let ui_handle_request = ui_handle.clone();
-    let _ = ui_handle_request.upgrade_in_event_loop(move |ui| {
-        ui.on_send_select_device_blue(move |identifier: SharedString| {
-            let device = identifier_name.get(&identifier.to_string()).unwrap();
-            let file = FileDialog::new()
-                .set_directory("/")
-                .pick_file();
-            let path_str = file.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-            adapter_clone.connect_device(device);
-            println!("Connected to {}", identifier.to_string());
-        });
-    });
 }
 
 async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>) {
