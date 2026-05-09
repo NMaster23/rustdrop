@@ -12,7 +12,8 @@ use std::rc::Rc;
 use rfd::FileDialog;
 use std::io::Read;
 use chunked_transfer::{Encoder, Decoder};
-use std::thread;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 slint::include_modules!();
 
@@ -27,18 +28,18 @@ fn send_file_wifi(ip: String, port: u32, file_path: &str) {
     if let Ok(mut stream) = TcpStream::connect(&addr) {
         println!("Connected to the server!");
         if let Ok(mut file) = File::open(file_path) {
-            let mut decoded = std::path::Path::new(file_path).file_name().unwrap().to_str().unwrap().as_bytes();
+            let decoded = std::path::Path::new(file_path).file_name().unwrap().to_str().unwrap().as_bytes();
             let mut encoded: Vec<u8> = vec![];
             {
                 let mut encoder = Encoder::with_chunks_size(&mut encoded, 5);
-                encoder.write_all(decoded);
+                let _ = encoder.write_all(decoded);
             }
             stream.write_all(&[encoded.len() as u8]).unwrap();
             stream.write_all(&encoded).unwrap();
             match io::copy(&mut file, &mut stream) {
                 Ok(bytes) => {
                     println!("Sent {} bytes successfully", bytes); 
-                    stream.shutdown(std::net::Shutdown::Both);
+                    let _ = stream.shutdown(std::net::Shutdown::Both);
                 }
                 Err(e) => println!("Failed to send file: {}", e),
             }
@@ -52,25 +53,23 @@ fn send_file_wifi(ip: String, port: u32, file_path: &str) {
 
 fn receive_file_wifi() {
     let listener = TcpListener::bind("0.0.0.0:5200").unwrap();
-    println!("Receiver active: Waiting for incoming files...");
     loop {
         match listener.accept() {
             Ok((mut socket, addr)) => {
-                println!("Incoming file from: {addr:?}");
                 let mut len_buf = [0u8; 1];
-                socket.read_exact(&mut len_buf);
+                let _ = socket.read_exact(&mut len_buf);
                 let len = len_buf[0] as usize;
                 let mut filename_buf = vec![0u8; len];
-                socket.read_exact(&mut filename_buf);
+                let _ = socket.read_exact(&mut filename_buf);
                 let mut filename = String::new();
-                let mut encoded = vec![];
+                let encoded = vec![];
                 let mut decoded = String::new();
                 let mut filename_u8 = &filename_buf as &[u8];
                 let mut filename_decoder = Decoder::new(&mut filename_u8);
-                filename_decoder.read_to_string(&mut filename);
+                let _ = filename_decoder.read_to_string(&mut filename);
                 let mut file = File::create(filename).unwrap();
                 let mut decoder = Decoder::new(&encoded as &[u8]);
-                decoder.read_to_string(&mut decoded);
+                let _ = decoder.read_to_string(&mut decoded);
                 match io::copy(&mut socket, &mut file) {
                     Ok(bytes) => println!("Received {} bytes and saved to ", bytes),
                     Err(e) => println!("Error during reception: {}", e),
@@ -82,38 +81,45 @@ fn receive_file_wifi() {
 }
 
 async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
-    let adapter = Adapter::default().await.ok_or("Bluetooth adapter not found").unwrap();
-        adapter.wait_available().await.unwrap();
-        println!("starting scan");
-        let mut scan = adapter.scan(&[]).await.unwrap();
-        println!("scan started");
-        let ui_handle_clone = ui_handle.clone();
-        while let Some(discovered_device) = scan.next().await {
-            let blue_data = BlueData {
-                identifier: discovered_device.device.name().as_deref().unwrap_or("(unknown)").to_string(),
-                signal_strength: discovered_device.rssi.map(|x| format!(" ({}dBm)", x)).unwrap_or_default(),
-                service_uuid: discovered_device.adv_data.services
-            };
-            ui_handle_clone.upgrade_in_event_loop(move |ui| {
-                let mut devices: Vec<BlueDevice> = ui.get_blue_devices().iter().collect();
-                let identifier = blue_data.identifier.into();
-                if let Some(pos) = devices.iter().position(|d| d.identifier == identifier) {
-                    devices[pos] = BlueDevice { identifier }
-                } else {
-                    devices.push(BlueDevice { identifier })
-                }
-                ui.set_blue_devices(slint::ModelRc::from(Rc::new(slint::VecModel::from(devices))));
-            }).unwrap();
-        }
-        let ui_handle_request = ui_handle.clone();
-        ui_handle_request.upgrade_in_event_loop(move |ui| {
-            ui.on_send_select_device_blue(move |identifier: SharedString| {
-                let file = FileDialog::new()
+    let adapter = Arc::new(Adapter::default().await.ok_or("Bluetooth adapter not found").unwrap());
+    let adapter_clone = Arc::clone(&adapter);
+    adapter.wait_available().await.unwrap();
+    println!("starting scan");
+    let mut scan = adapter.scan(&[]).await.unwrap();
+    println!("scan started");
+    let ui_handle_clone = ui_handle.clone();
+    let mut identifier_name: HashMap<String, Device>= HashMap::new();
+    while let Some(discovered_device) = scan.next().await {
+        let blue_data = BlueData {
+            identifier: discovered_device.device.name().as_deref().unwrap_or("(unknown)").to_string(),
+            signal_strength: discovered_device.rssi.map(|x| format!(" ({}dBm)", x)).unwrap_or_default(),
+            service_uuid: discovered_device.adv_data.services
+        };
+        let hashmap_identifier = discovered_device.device.clone();
+        identifier_name.insert(blue_data.identifier.clone(), hashmap_identifier);
+        ui_handle_clone.upgrade_in_event_loop(move |ui| {
+            let mut devices: Vec<BlueDevice> = ui.get_blue_devices().iter().collect();
+            let identifier = blue_data.identifier.into();
+            if let Some(pos) = devices.iter().position(|d| d.identifier == identifier) {
+                devices[pos] = BlueDevice { identifier }
+            } else {
+                devices.push(BlueDevice { identifier })
+            }
+            ui.set_blue_devices(slint::ModelRc::from(Rc::new(slint::VecModel::from(devices))));
+        }).unwrap();
+    }
+    let ui_handle_request = ui_handle.clone();
+    let _ = ui_handle_request.upgrade_in_event_loop(move |ui| {
+        ui.on_send_select_device_blue(move |identifier: SharedString| {
+            let device = identifier_name.get(&identifier.to_string()).unwrap();
+            let file = FileDialog::new()
                 .set_directory("/")
                 .pick_file();
-                let path_str = file.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-            });
+            let path_str = file.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+            adapter_clone.connect_device(device);
+            println!("Connected to {}", identifier.to_string());
         });
+    });
 }
 
 async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>) {
