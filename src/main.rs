@@ -94,10 +94,10 @@ async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
     let _ = ui_handle_request.upgrade_in_event_loop(move |ui| {
         ui.on_send_select_device_blue(move |identifier: SharedString| {
             let device = &identifier_name_ui.lock().unwrap()[&identifier.to_string()].clone();
-            let file = FileDialog::new()
-                .set_directory("/")
-                .pick_file();
-            let path_str = file.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+            //let file = FileDialog::new()
+            //    .set_directory("/")
+            //    .pick_file();
+            //let path_str = file.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
             adapter_ui.connect_device(device);
             println!("Connected to {}", identifier.to_string());
         });
