@@ -83,12 +83,12 @@ fn receive_file_wifi() {
 async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
     let adapter = Arc::new(Adapter::default().await.ok_or("Bluetooth adapter not found").unwrap());
     let adapter_ui = Arc::clone(&adapter);
-    adapter.wait_available().await.unwrap();
+    adapter.wait_available().await;
     println!("starting scan");
     let mut scan = adapter.scan(&[]).await.unwrap();
     println!("scan started");
     let ui_handle_clone = ui_handle.clone();
-    let mut identifier_name = Arc::new(Mutex::new(HashMap::<String, Device>::new()));
+    let identifier_name = Arc::new(Mutex::new(HashMap::<String, Device>::new()));
     let identifier_name_map = Arc::clone(&identifier_name);
     let ui_handle_request = ui_handle.clone();
     let _ = ui_handle_request.upgrade_in_event_loop(move |ui| {
@@ -102,7 +102,7 @@ async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
             //let path_str = file.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
             async_std::task::spawn(async move {
                 let device = &identifier_name.lock().unwrap()[&identifier.to_string()].clone();
-                adapter_ui.connect_device(device);
+                adapter_ui.connect_device(device).await.unwrap();
                 println!("Connected to {}", identifier.to_string());
             });
         });
