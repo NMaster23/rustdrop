@@ -14,6 +14,8 @@ use std::io::Read;
 use chunked_transfer::{Encoder, Decoder};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use async_std::future::timeout;
+use std::time::Duration;
 
 slint::include_modules!();
 
@@ -83,7 +85,11 @@ fn receive_file_wifi() {
 async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
     let adapter = Arc::new(Adapter::default().await.ok_or("Bluetooth adapter not found").unwrap());
     let adapter_ui = Arc::clone(&adapter);
-    adapter.wait_available().await;
+    let adapter_timeout = adapter.wait_available();
+    if let Err(_) = timeout(Duration::from_secs(1), adapter_timeout).await {
+        println!("Please check whether your device supports Bluetooth, or if your Bluetooth is turned off.");
+        return;
+    }
     println!("starting scan");
     let mut scan = adapter.scan(&[]).await.unwrap();
     println!("scan started");
