@@ -1,4 +1,3 @@
-use bluest::btuuid::characteristics;
 use mdns_sd::{ServiceDaemon, ServiceInfo, ServiceEvent};
 use async_std::stream::StreamExt;
 use mdns_sd::Error;
@@ -25,6 +24,9 @@ struct BlueData {
     signal_strength: String,
     service_uuid: Vec<bluest::Uuid>,
 }
+
+const TARGET_CHAR: Uuid = Uuid::from_u128(0x12345678_1234_5678_1234_56789abcdef1);
+const TARGET_SERVICE: Uuid = Uuid::from_u128(0x12345678_1234_5678_1234_56789abcdef0);
 
 fn send_file_wifi(ip: String, port: u32, file_path: &str) {
     let addr = format!("{}:{}", ip, port);
@@ -83,33 +85,22 @@ fn receive_file_wifi() {
     }
 }
 
-async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str) {
-    let file = File::open(file_path).unwrap();
-    let devices = adapter.connected_devices().await.unwrap();
-    for device in devices {
-        println!("found {:?}", device);
-        adapter.connect_device(&device).await.unwrap();
-        let services = device.services().await.unwrap();
-        for service in services {
-            println!("{:?}", service);
-            let characteristics = service.characteristics().await.unwrap();
-            for characteristic in characteristics {
-                println!("{:?}", characteristic);
-                let props = characteristic.properties().await.unwrap();
-                println!("props: {:?}", props);
-                if props.read {
-                    println!("value: {:?}", characteristic.read().await);
-                }
-                if props.write_without_response {
-                    println!("max_write_len: {:?}", characteristic.max_write_len());
-                }
-
-                let descriptors = characteristic.descriptors().await.unwrap();
-                for descriptor in descriptors {
-                    println!("{:?}: {:?}", descriptor, descriptor.read().await);
-                }
+async fn send_file_blue(device: &Device) {
+    let mut service_char = None;
+    let file = std::fs::read("C:\\Users\\nihaa\\Downloads\\keyboard (2).json").as_bytes();
+    let services = device.services().await.unwrap();
+    for service in services {
+        let characteristics = service.characteristics().await.unwrap();
+        for characteristic in characteristics {
+            if service.uuid() == TARGET_SERVICE && characteristic.uuid() == TARGET_CHAR {
+                service_char = Some(characteristic);
+                break;
             }
         }
+    }
+    if let Some(write_char) = service_char {
+        write_char.write(file).await.unwrap();
+        println!("file sent");
     }
 }
 
@@ -149,11 +140,10 @@ async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
                 let id_str = identifier.to_string();
                 let device = identifier_name.lock().unwrap().get(&id_str).cloned().unwrap();
                 let device_file = device.clone();
-                let adapter_file = Arc::clone(&adapter_connect);
                 adapter_connect.connect_device(&device_file).await.unwrap();
                 println!("Connected to {}", identifier.to_string());
                 *active_session_clone.lock().unwrap() = Some(device);
-                send_file_blue(&adapter_file, &device_file, "").await;
+                send_file_blue(&device_file).await;
             });
         });
         ui.on_disconnect(move || {
