@@ -89,17 +89,22 @@ async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
     println!("scan started");
     let ui_handle_clone = ui_handle.clone();
     let mut identifier_name = Arc::new(Mutex::new(HashMap::<String, Device>::new()));
-    let identifier_name_ui = Arc::clone(&identifier_name);
+    let identifier_name_map = Arc::clone(&identifier_name);
     let ui_handle_request = ui_handle.clone();
     let _ = ui_handle_request.upgrade_in_event_loop(move |ui| {
+        let identifier_name = Arc::clone(&identifier_name);
         ui.on_send_select_device_blue(move |identifier: SharedString| {
-            let device = &identifier_name_ui.lock().unwrap()[&identifier.to_string()].clone();
+            let identifier_name = Arc::clone(&identifier_name);
+            let adapter_ui = Arc::clone(&adapter_ui);
             //let file = FileDialog::new()
             //    .set_directory("/")
             //    .pick_file();
             //let path_str = file.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-            adapter_ui.connect_device(device);
-            println!("Connected to {}", identifier.to_string());
+            async_std::task::spawn(async move {
+                let device = &identifier_name.lock().unwrap()[&identifier.to_string()].clone();
+                adapter_ui.connect_device(device);
+                println!("Connected to {}", identifier.to_string());
+            });
         });
     });
     while let Some(discovered_device) = scan.next().await {
@@ -109,8 +114,10 @@ async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
             service_uuid: discovered_device.adv_data.services
         };
         let hashmap_identifier = discovered_device.device.clone();
-        let mut hashmap = identifier_name.lock().unwrap();
+        let debug = discovered_device.device.name().as_deref().unwrap_or("(unknown)").to_string();
+        let mut hashmap = identifier_name_map.lock().unwrap();
         hashmap.insert(blue_data.identifier.clone(), hashmap_identifier);
+        println!("Devices: {}", debug);
         ui_handle_clone.upgrade_in_event_loop(move |ui| {
             let mut devices: Vec<BlueDevice> = ui.get_blue_devices().iter().collect();
             let identifier = blue_data.identifier.into();
