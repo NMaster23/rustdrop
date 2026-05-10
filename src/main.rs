@@ -85,6 +85,7 @@ fn receive_file_wifi() {
 async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
     let adapter = Arc::new(Adapter::default().await.ok_or("Bluetooth adapter not found").unwrap());
     let adapter_ui = Arc::clone(&adapter);
+    let adapter_disconnect = Arc::clone(&adapter);
     let adapter_timeout = adapter.wait_available();
     if let Err(_) = timeout(Duration::from_secs(1), adapter_timeout).await {
         println!("Please check whether your device supports Bluetooth, or if your Bluetooth is turned off.");
@@ -93,47 +94,74 @@ async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
     println!("starting scan");
     let mut scan = adapter.scan(&[]).await.unwrap();
     println!("scan started");
+    let is_scanning = Arc::new(Mutex::new(true));
+    let is_scanning_stop = Arc::clone(&is_scanning);
+    let is_scanning_start = Arc::clone(&is_scanning);
     let ui_handle_clone = ui_handle.clone();
     let identifier_name = Arc::new(Mutex::new(HashMap::<String, Device>::new()));
     let identifier_name_map = Arc::clone(&identifier_name);
     let ui_handle_request = ui_handle.clone();
+    let active_session = Arc::new(Mutex::new(None));
+    let disconnect_session = Arc::clone(&active_session);
     let _ = ui_handle_request.upgrade_in_event_loop(move |ui| {
         let identifier_name = Arc::clone(&identifier_name);
         ui.on_send_select_device_blue(move |identifier: SharedString| {
+            let adapter_connect = Arc::clone(&adapter_ui);
             let identifier_name = Arc::clone(&identifier_name);
-            let adapter_ui = Arc::clone(&adapter_ui);
             //let file = FileDialog::new()
             //    .set_directory("/")
             //    .pick_file();
             //let path_str = file.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+            let active_session_clone = Arc::clone(&active_session);
+            *is_scanning_stop.lock().unwrap() = false;
             async_std::task::spawn(async move {
-                let device = &identifier_name.lock().unwrap()[&identifier.to_string()].clone();
-                adapter_ui.connect_device(device).await.unwrap();
+                let id_str = identifier.to_string();
+                let device = identifier_name.lock().unwrap().get(&id_str).cloned().unwrap();
+                adapter_connect.connect_device(&device).await.unwrap();
                 println!("Connected to {}", identifier.to_string());
+                *active_session_clone.lock().unwrap() = Some(device);
             });
         });
-    });
-    while let Some(discovered_device) = scan.next().await {
-        let blue_data = BlueData {
-            identifier: discovered_device.device.name().as_deref().unwrap_or("(unknown)").to_string(),
-            signal_strength: discovered_device.rssi.map(|x| format!(" ({}dBm)", x)).unwrap_or_default(),
-            service_uuid: discovered_device.adv_data.services
-        };
-        let hashmap_identifier = discovered_device.device.clone();
-        let debug = discovered_device.device.name().as_deref().unwrap_or("(unknown)").to_string();
-        let mut hashmap = identifier_name_map.lock().unwrap();
-        hashmap.insert(blue_data.identifier.clone(), hashmap_identifier);
-        println!("Devices: {}", debug);
-        ui_handle_clone.upgrade_in_event_loop(move |ui| {
-            let mut devices: Vec<BlueDevice> = ui.get_blue_devices().iter().collect();
-            let identifier = blue_data.identifier.into();
-            if let Some(pos) = devices.iter().position(|d| d.identifier == identifier) {
-                devices[pos] = BlueDevice { identifier }
-            } else {
-                devices.push(BlueDevice { identifier })
+        ui.on_disconnect(move || {
+            if let Some(session) = disconnect_session.lock().unwrap().take() {
+                let device = session.clone();
+                let adapter_async = Arc::clone(&adapter_disconnect);
+                let is_scanning_start = Arc::clone(&is_scanning_start);
+                async_std::task::spawn(async move {
+                    adapter_async.disconnect_device(&device).await.unwrap();
+                    println!("Disconnected");
+                    *is_scanning_start.lock().unwrap() == true;
+                });
             }
-            ui.set_blue_devices(slint::ModelRc::from(Rc::new(slint::VecModel::from(devices))));
-        }).unwrap();
+        });
+    });
+    if *is_scanning.lock().unwrap() {
+        println!("Scan started");
+        while let Some(discovered_device) = scan.next().await {
+            if !*is_scanning.lock().unwrap() {
+                println!("Scan stopped");
+                break;
+            }
+            let blue_data = BlueData {
+                identifier: discovered_device.device.name().as_deref().unwrap_or("(unknown)").to_string(),
+                signal_strength: discovered_device.rssi.map(|x| format!(" ({}dBm)", x)).unwrap_or_default(),
+                service_uuid: discovered_device.adv_data.services
+            };
+            let hashmap_identifier = discovered_device.device.clone();
+            let debug = discovered_device.device.name().as_deref().unwrap_or("(unknown)").to_string();
+            let mut hashmap = identifier_name_map.lock().unwrap();
+            hashmap.insert(blue_data.identifier.clone(), hashmap_identifier);
+            ui_handle_clone.upgrade_in_event_loop(move |ui| {
+                let mut devices: Vec<BlueDevice> = ui.get_blue_devices().iter().collect();
+                let identifier = blue_data.identifier.into();
+                if let Some(pos) = devices.iter().position(|d| d.identifier == identifier) {
+                    devices[pos] = BlueDevice { identifier }
+                } else {
+                    devices.push(BlueDevice { identifier })
+                }
+                ui.set_blue_devices(slint::ModelRc::from(Rc::new(slint::VecModel::from(devices))));
+            }).unwrap();
+        }
     }
 }
 

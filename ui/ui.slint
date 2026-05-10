@@ -19,14 +19,16 @@ export component AppWindow inherits Window {
     in-out property <[WifiDevice]> wifi_devices: [];
     in-out property <[BlueDevice]> blue_devices: [];
     in-out property <bool> sending_file;
+    in-out property <bool> blue_connected_menu;
 
     callback send_mode(bool);
     callback send_scan(bool);
     callback send_select_device_wifi(string);
     callback send_select_device_blue(string);
+    callback disconnect();
     
     if (mode_select):
-        HorizontalLayout {    
+        VerticalLayout {    
             Button {
                 text: "Bluetooth";
                 clicked => {
@@ -59,7 +61,7 @@ export component AppWindow inherits Window {
             }
         }
     }
-    if (blue_scan_menu): ScrollView {
+    if (blue_scan_menu && !blue_connected_menu): ScrollView {
         VerticalLayout {
             spacing: 5px;
             for device[i] in blue_devices: Button {
@@ -68,8 +70,16 @@ export component AppWindow inherits Window {
                 clicked => {
                     self.text = "Pairing";
                     send_select_device_blue(device.identifier);
+                    blue_connected_menu = true;
                 }
             }
+        }
+    }
+    if (blue_connected_menu): Button {
+        text: "Disconnect";
+        clicked => {
+            blue_connected_menu = false;
+            disconnect();
         }
     }
 }
