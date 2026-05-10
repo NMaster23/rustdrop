@@ -1,3 +1,4 @@
+use bluest::btuuid::characteristics;
 use mdns_sd::{ServiceDaemon, ServiceInfo, ServiceEvent};
 use async_std::stream::StreamExt;
 use mdns_sd::Error;
@@ -82,6 +83,36 @@ fn receive_file_wifi() {
     }
 }
 
+async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str) {
+    let file = File::open(file_path).unwrap();
+    let devices = adapter.connected_devices().await.unwrap();
+    for device in devices {
+        println!("found {:?}", device);
+        adapter.connect_device(&device).await.unwrap();
+        let services = device.services().await.unwrap();
+        for service in services {
+            println!("{:?}", service);
+            let characteristics = service.characteristics().await.unwrap();
+            for characteristic in characteristics {
+                println!("{:?}", characteristic);
+                let props = characteristic.properties().await.unwrap();
+                println!("props: {:?}", props);
+                if props.read {
+                    println!("value: {:?}", characteristic.read().await);
+                }
+                if props.write_without_response {
+                    println!("max_write_len: {:?}", characteristic.max_write_len());
+                }
+
+                let descriptors = characteristic.descriptors().await.unwrap();
+                for descriptor in descriptors {
+                    println!("{:?}: {:?}", descriptor, descriptor.read().await);
+                }
+            }
+        }
+    }
+}
+
 async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
     let adapter = Arc::new(Adapter::default().await.ok_or("Bluetooth adapter not found").unwrap());
     let adapter_ui = Arc::clone(&adapter);
@@ -117,9 +148,12 @@ async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
             async_std::task::spawn(async move {
                 let id_str = identifier.to_string();
                 let device = identifier_name.lock().unwrap().get(&id_str).cloned().unwrap();
-                adapter_connect.connect_device(&device).await.unwrap();
+                let device_file = device.clone();
+                let adapter_file = Arc::clone(&adapter_connect);
+                adapter_connect.connect_device(&device_file).await.unwrap();
                 println!("Connected to {}", identifier.to_string());
                 *active_session_clone.lock().unwrap() = Some(device);
+                send_file_blue(&adapter_file, &device_file, "").await;
             });
         });
         ui.on_disconnect(move || {
@@ -130,7 +164,7 @@ async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
                 async_std::task::spawn(async move {
                     adapter_async.disconnect_device(&device).await.unwrap();
                     println!("Disconnected");
-                    *is_scanning_start.lock().unwrap() == true;
+                    *is_scanning_start.lock().unwrap() = true;
                 });
             }
         });
