@@ -85,12 +85,11 @@ fn receive_file_wifi() {
     }
 }
 
-async fn send_file_blue(device: &Device) {
+async fn send_file_blue(device: &Device, file_path: &str) {
     let mut service_char = None;
-    let file = std::fs::read("C:\\Users\\nihaa\\Downloads\\keyboard (2).json").as_bytes();
-    let services = device.services().await.unwrap();
+    let services = device.discover_services().await.unwrap();
     for service in services {
-        let characteristics = service.characteristics().await.unwrap();
+        let characteristics = service.discover_characteristics().await.unwrap();
         for characteristic in characteristics {
             if service.uuid() == TARGET_SERVICE && characteristic.uuid() == TARGET_CHAR {
                 service_char = Some(characteristic);
@@ -98,9 +97,23 @@ async fn send_file_blue(device: &Device) {
             }
         }
     }
-    if let Some(write_char) = service_char {
-        write_char.write(file).await.unwrap();
-        println!("file sent");
+    if let Ok(mut file) = File::open(file_path) {
+        let file_bytes = std::fs::read(file_path).expect("Failed to read file");
+        let mut encoded: Vec<u8> = vec![];
+        let chunk_size = 5;
+        if let Some(write_char) = service_char {
+            for chunk in encoded.chunks(chunk_size) {
+                if let Err(e) = write_char.write(chunk).await {
+                    println!("Error Sending Chunk: {}", e);
+                    break;
+                }
+                async_std::task::sleep(Duration::from_millis(10)).await;
+            }
+            println!("file sent");
+            drop(device);
+        }
+    } else {
+        println!("Could not open file: {}", file_path)
     }
 }
 
@@ -130,10 +143,6 @@ async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
         ui.on_send_select_device_blue(move |identifier: SharedString| {
             let adapter_connect = Arc::clone(&adapter_ui);
             let identifier_name = Arc::clone(&identifier_name);
-            //let file = FileDialog::new()
-            //    .set_directory("/")
-            //    .pick_file();
-            //let path_str = file.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
             let active_session_clone = Arc::clone(&active_session);
             *is_scanning_stop.lock().unwrap() = false;
             async_std::task::spawn(async move {
@@ -143,7 +152,11 @@ async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
                 adapter_connect.connect_device(&device_file).await.unwrap();
                 println!("Connected to {}", identifier.to_string());
                 *active_session_clone.lock().unwrap() = Some(device);
-                send_file_blue(&device_file).await;
+                let file = FileDialog::new()
+                    .set_directory("/")
+                    .pick_file();
+                let path_str = file.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+                send_file_blue(&device_file, &path_str).await;
             });
         });
         ui.on_disconnect(move || {
