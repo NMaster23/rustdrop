@@ -36,7 +36,7 @@ fn send_file_wifi(ip: String, port: u32, file_path: &str) {
             let decoded = std::path::Path::new(file_path).file_name().unwrap().to_str().unwrap().as_bytes();
             let mut encoded: Vec<u8> = vec![];
             {
-                let mut encoder = Encoder::with_chunks_size(&mut encoded, 5);
+                let mut encoder = Encoder::with_chunks_size(&mut encoded, 8192);
                 let _ = encoder.write_all(decoded);
             }
             stream.write_all(&[encoded.len() as u8]).unwrap();
@@ -90,30 +90,36 @@ async fn send_file_blue(device: &Device, file_path: &str) {
     let services = device.discover_services().await.unwrap();
     for service in services {
         let characteristics = service.discover_characteristics().await.unwrap();
+        println!("Service: {:?}", service);
         for characteristic in characteristics {
+            println!("Characteristics: {:?}", characteristic);
             if service.uuid() == TARGET_SERVICE && characteristic.uuid() == TARGET_CHAR {
                 service_char = Some(characteristic);
                 break;
             }
         }
     }
-    if let Ok(mut file) = File::open(file_path) {
-        let file_bytes = std::fs::read(file_path).expect("Failed to read file");
-        let mut encoded: Vec<u8> = vec![];
-        let chunk_size = 5;
-        if let Some(write_char) = service_char {
-            for chunk in encoded.chunks(chunk_size) {
-                if let Err(e) = write_char.write(chunk).await {
-                    println!("Error Sending Chunk: {}", e);
-                    break;
-                }
-                async_std::task::sleep(Duration::from_millis(10)).await;
+    let file_name = std::path::Path::new(file_path).file_name().unwrap().to_str().unwrap().as_bytes();
+    let file_bytes = std::fs::read(file_path).expect("Failed to read file");
+    let mut to_send = Vec::new();
+    to_send.push(file_name.len() as u8);
+    to_send.extend_from_slice(file_name);
+    to_send.extend_from_slice(&file_bytes);
+    let mut encoded: Vec<u8> = vec![];
+    {
+        let mut encoder = Encoder::with_chunks_size(&mut encoded, 20);
+        let _ = encoder.write_all(&to_send);
+    }
+    let chunk_size = 20;
+    if let Some(write_char) = service_char {
+        for chunk in encoded.chunks(chunk_size) {
+            if let Err(e) = write_char.write(chunk).await {
+                println!("Error Sending Chunk: {}", e);
+                break;
             }
-            println!("file sent");
-            drop(device);
+            async_std::task::sleep(Duration::from_millis(10)).await;
         }
-    } else {
-        println!("Could not open file: {}", file_path)
+        println!("file sent");
     }
 }
 
@@ -156,6 +162,7 @@ async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
                     .set_directory("/")
                     .pick_file();
                 let path_str = file.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+                println!("{}", path_str);
                 send_file_blue(&device_file, &path_str).await;
             });
         });
