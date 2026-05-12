@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 async-std = "1.13.2"
+ble-peripheral-rust = "0.2.0"
 bluest = "0.6.9"
 chunked_transfer = "1.5.0"
 futures-util = "0.3.32"

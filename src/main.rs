@@ -16,6 +16,20 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use async_std::future::timeout;
 use std::time::Duration;
+use ble_peripheral_rust::{
+    gatt::{
+        characteristic::Characteristic,
+        descriptor::Descriptor,
+        peripheral_event::{
+            PeripheralEvent, ReadRequestResponse, RequestResponse, WriteRequestResponse,
+        },
+        properties::{AttributePermission, CharacteristicProperty},
+        service::Service,
+    },
+    uuid::ShortUuid,
+    Peripheral, PeripheralImpl,
+};
+use tokio::sync::mpsc::channel;
 
 slint::include_modules!();
 
@@ -105,14 +119,8 @@ async fn send_file_blue(device: &Device, file_path: &str) {
     to_send.push(file_name.len() as u8);
     to_send.extend_from_slice(file_name);
     to_send.extend_from_slice(&file_bytes);
-    let mut encoded: Vec<u8> = vec![];
-    {
-        let mut encoder = Encoder::with_chunks_size(&mut encoded, 20);
-        let _ = encoder.write_all(&to_send);
-    }
-    let chunk_size = 20;
     if let Some(write_char) = service_char {
-        for chunk in encoded.chunks(chunk_size) {
+        for chunk in to_send.chunks(20) {
             if let Err(e) = write_char.write(chunk).await {
                 println!("Error Sending Chunk: {}", e);
                 break;
@@ -121,6 +129,25 @@ async fn send_file_blue(device: &Device, file_path: &str) {
         }
         println!("file sent");
     }
+}
+
+async fn receive_file_blue() {
+    let (sender_tx, mut receiver_rx) = channel::<PeripheralEvent>(256);
+    let mut peripheral = Peripheral::new(sender_tx).await.unwrap();
+    while !peripheral.is_powered().await.unwrap() {}
+    peripheral.add_service(
+        &Service {
+            uuid: TARGET_SERVICE,
+            primary: true,
+            characteristics: vec![
+                Characteristic {
+                    uuid: TARGET_CHAR,
+                    ..Default::default()
+                }
+            ],
+        }
+    ).await;
+    peripheral.start_advertising("RustDrop", &[Uuid::from_short(0x1234_u16)]).await;
 }
 
 async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
