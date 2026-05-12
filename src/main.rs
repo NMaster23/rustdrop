@@ -23,7 +23,6 @@ use ble_peripheral_rust::{
         peripheral_event::{
             PeripheralEvent, ReadRequestResponse, RequestResponse, WriteRequestResponse,
         },
-        properties::{AttributePermission, CharacteristicProperty},
         service::Service,
     },
     uuid::ShortUuid,
@@ -147,7 +146,17 @@ async fn receive_file_blue() {
             ],
         }
     ).await;
-    peripheral.start_advertising("RustDrop", &[Uuid::from_short(0x1234_u16)]).await;
+    peripheral.start_advertising("RustDrop", &[TARGET_SERVICE]).await;
+    while let Some(event) = receiver_rx.recv().await {
+        match event {
+            PeripheralEvent::WriteRequest { request: _, value, offset: _, responder } => {
+                responder.send(WriteRequestResponse {
+                    response: RequestResponse::Success,
+                });
+            }
+            _ => {}
+        }
+    }
 }
 
 async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
