@@ -1,4 +1,4 @@
-package com.example.rustdropandroid;
+package com.nmaster23.rustdrop.android;
 
 import org.junit.Test;
 
