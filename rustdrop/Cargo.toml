@@ -3,6 +3,9 @@ name = "rustdrop"
 version = "0.1.0"
 edition = "2024"
 
+[target.'cfg(android)'.dependencies]
+jni = "0.22.4"
+
 [dependencies]
 async-std = "1.13.2"
 ble-peripheral-rust = "0.2.0"

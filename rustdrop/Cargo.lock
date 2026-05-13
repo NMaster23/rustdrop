@@ -5044,6 +5044,7 @@ dependencies = [
  "chunked_transfer",
  "futures-util",
  "io",
+ "jni",
  "local-ip-address",
  "mdns",
  "mdns-sd",
