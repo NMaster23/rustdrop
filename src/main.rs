@@ -7,11 +7,10 @@ use slint::SharedString;
 use std::f32::consts::E;
 use std::net::{TcpListener, TcpStream};
 use std::fs::File;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use slint::Model;
 use std::rc::Rc;
 use rfd::FileDialog;
-use std::io::Read;
 use chunked_transfer::{Encoder, Decoder};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -168,7 +167,7 @@ async fn receive_file_blue() {
                         let filename = String::from_utf8_lossy(&received_data[1..name_len + 1]).to_string();
                         let file_data = &received_data[name_len + 1..];
                         println!("Received file {} with {} bytes", filename, file_data.len());
-                        std::fs::write(&filename, file_data);
+                        let _ = async_std::fs::write(&filename, file_data).await;
                     }
                 }
                 received_data.clear();   
