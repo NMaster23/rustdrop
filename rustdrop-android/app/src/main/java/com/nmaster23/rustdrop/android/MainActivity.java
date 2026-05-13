@@ -28,8 +28,11 @@ public class MainActivity extends AppCompatActivity {
         if (requestCode == PICK_FILE && resultCode == Activity.RESULT_OK) {
             Uri uri = null;
             if (resultData != null) {
-                Cursor cursor = getContentResolver().query(uri, null, null, null, null);
                 uri = resultData.getData();
+                if (uri = null) {
+                    return;
+                }
+                Cursor cursor = getContentResolver().query(uri, null, null, null, null);
                 String filename = null;
                 try {
                     if (cursor != null && cursor.moveToFirst()) {
