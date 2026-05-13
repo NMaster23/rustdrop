@@ -4,7 +4,6 @@ use mdns_sd::Error;
 use bluest::*;
 use local_ip_address::local_ip;
 use slint::SharedString;
-use std::f32::consts::E;
 use std::net::{TcpListener, TcpStream};
 use std::fs::File;
 use std::io::{self, Read, Write};

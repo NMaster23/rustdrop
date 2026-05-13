@@ -14,51 +14,8 @@ local-ip-address = "0.6.12"
 mdns = "3.0.0"
 mdns-sd = "0.19.1"
 rfd = "0.17.2"
-slint = { version = "1.16.1", features = ["backend-android-activity-06"] }
+slint = "1.16.1"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "time"] }
 
 [build-dependencies]
 slint-build = "1.16.1"
-
-[lib]
-crate-type = ["cdylib", "rlib"]
-path = "src/lib.rs"
-
-[package.metadata.android]
-apk_name = "RustDrop"
-target_sdk_version = 33
-min_sdk_version = 26
-build_targets = ["aarch64-linux-android"]
-
-[[package.metadata.android.uses_permission]]
-name = "android.permission.INTERNET"
-[[package.metadata.android.uses_permission]]
-name = "android.permission.ACCESS_NETWORK_STATE"
-[[package.metadata.android.uses_permission]]
-name = "android.permission.CHANGE_WIFI_MULTICAST_STATE" # For mDNS
-[[package.metadata.android.uses_permission]]
-name = "android.permission.ACCESS_WIFI_STATE"
-
-# Bluetooth Permissions
-[[package.metadata.android.uses_permission]]
-name = "android.permission.BLUETOOTH"
-[[package.metadata.android.uses_permission]]
-name = "android.permission.BLUETOOTH_ADMIN"
-[[package.metadata.android.uses_permission]]
-name = "android.permission.BLUETOOTH_SCAN"
-[[package.metadata.android.uses_permission]]
-name = "android.permission.BLUETOOTH_CONNECT"
-[[package.metadata.android.uses_permission]]
-name = "android.permission.BLUETOOTH_ADVERTISE"
-[[package.metadata.android.uses_permission]]
-name = "android.permission.ACCESS_FINE_LOCATION" # Often required for BLE scanning
-
-# Storage Permissions
-[[package.metadata.android.uses_permission]]
-name = "android.permission.READ_EXTERNAL_STORAGE"
-[[package.metadata.android.uses_permission]]
-name = "android.permission.WRITE_EXTERNAL_STORAGE"
-
-[[package.metadata.android.uses_feature]]
-name = "android.hardware.bluetooth_le"
-required = true
