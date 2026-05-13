@@ -4,6 +4,7 @@ use mdns_sd::Error;
 use bluest::*;
 use local_ip_address::local_ip;
 use slint::SharedString;
+use std::f32::consts::E;
 use std::net::{TcpListener, TcpStream};
 use std::fs::File;
 use std::io::{self, Write};
@@ -147,14 +148,31 @@ async fn receive_file_blue() {
         }
     ).await;
     peripheral.start_advertising("RustDrop", &[TARGET_SERVICE]).await;
-    while let Some(event) = receiver_rx.recv().await {
-        match event {
-            PeripheralEvent::WriteRequest { request: _, value, offset: _, responder } => {
-                responder.send(WriteRequestResponse {
-                    response: RequestResponse::Success,
-                });
+    let mut received_data = Vec::new();
+    loop {
+        match timeout(Duration::from_secs(1), receiver_rx.recv()).await {
+            Ok(Some(event)) => {
+                match event {
+                    PeripheralEvent::WriteRequest { request: _, value, offset: _, responder } => {
+                        received_data.extend_from_slice(&value);
+                        responder.send(WriteRequestResponse { response: RequestResponse::Success });
+                    }
+                    _ => {}
+                }
+            },
+            Ok(None) => break,
+            Err(_) => {
+                if received_data.len() > 1 {
+                    let name_len = received_data[0] as usize;
+                    if received_data.len() > name_len {
+                        let filename = String::from_utf8_lossy(&received_data[1..name_len + 1]).to_string();
+                        let file_data = &received_data[name_len + 1..];
+                        println!("Received file {} with {} bytes", filename, file_data.len());
+                        std::fs::write(&filename, file_data);
+                    }
+                }
+                received_data.clear();   
             }
-            _ => {}
         }
     }
 }
@@ -299,6 +317,7 @@ async fn main() -> Result<(), Error> {
     let ui = AppWindow::new().unwrap();
     let mdns = ServiceDaemon::new().expect("Failed to create daemon");
     let ui_clone = ui.as_weak();
+    async_std::task::spawn(receive_file_blue());
     ui.on_send_mode(move |blue_or_wifi: bool| {
         if blue_or_wifi {
             let blue_ui = ui_clone.clone();
