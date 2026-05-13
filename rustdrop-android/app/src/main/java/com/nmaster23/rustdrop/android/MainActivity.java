@@ -2,14 +2,18 @@ package com.nmaster23.rustdrop.android;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.database.Cursor;
 import android.net.Uri;
+import android.os.Build;
+import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract;
+import android.provider.OpenableColumns;
 
 import androidx.appcompat.app.AppCompatActivity;
 
 public class MainActivity extends AppCompatActivity {
     private static final int PICK_FILE = 2;
-    public static final String ACTION_OPEN_DOCUMENT;
+    public native void FilePicker(String filename, int filepath);
     static {
         System.loadLibrary("rustdrop");
     }
@@ -29,7 +33,7 @@ public class MainActivity extends AppCompatActivity {
             Uri uri = null;
             if (resultData != null) {
                 uri = resultData.getData();
-                if (uri = null) {
+                if (uri == null) {
                     return;
                 }
                 Cursor cursor = getContentResolver().query(uri, null, null, null, null);
@@ -41,17 +45,15 @@ public class MainActivity extends AppCompatActivity {
                             filename = cursor.getString(nameindex);
                         }
                         int pathindex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
-
-                        cursor.close();
                     }
+                    cursor.close();
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
-                try {
-                    ParcelFileDescriptor filepfd = getContentResolver().openAssetFileDescriptor(uri, "r");
+                try (ParcelFileDescriptor filepfd = getContentResolver().openFileDescriptor(uri, "r")) {
                     if (filepfd != null) {
                         int filepath = filepfd.detachFd();
-                        this.onFilePicked(filename, filepath);
+                        this.FilePicker(filename, filepath);
                     }
                 } catch (Exception e) {
                     e.printStackTrace();
