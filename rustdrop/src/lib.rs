@@ -1,11 +1,9 @@
-use jni::{JavaVM, sys::jint};
+use jni::{JavaVM, sys::{jint, jbyteArray}};
 use jni::JNIEnv;
 use jni::objects::{JClass, JString};
-use jni::strings::JNIString;
 use std::io::Read;
 use std::os::fd::FromRawFd;
 use std::fs::File;
-use jni::objects::JByteArray;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Mutex, OnceLock};
 
@@ -15,8 +13,10 @@ static FILE_SENDER: OnceLock<Mutex<Sender<(String, File)>>> = OnceLock::new();
 pub static FILE_RECEIVER: OnceLock<Mutex<Receiver<(String, File)>>> = OnceLock::new();
 pub static BLE_RECEIVER: OnceLock<Mutex<Receiver<Vec<u8>>>> = OnceLock::new();
 
+slint::include_modules!();
+
 #[cfg(target_os = "android")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_com_nmaster23_rustdrop_android_MainActivity_initJniBridge<'local>(
     env: JNIEnv<'local>,
     _class: JClass<'local>,
@@ -38,7 +38,7 @@ pub extern "system" fn Java_com_nmaster23_rustdrop_android_MainActivity_initJniB
 #[unsafe(no_mangle)]
 pub fn open_picker() {
     if let Some(vm) = JVM.get() {
-        let mut env = vm.attach_current_thread().unwrap();
+        let env = vm.attach_current_thread().unwrap();
         let class = env.find_class("com/nmaster23/rustdrop/android/MainActivity").unwrap();
         env.call_static_method(class, "FilePickerTrigger", "()V", &[]).unwrap();
     }
@@ -47,14 +47,14 @@ pub fn open_picker() {
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_nmaster23_rustdrop_android_MainActivity_FilePicker<'local>(
-    mut env: JNIEnv<'local>,
+    env: JNIEnv<'local>,
     class: JClass<'local>,
     filename_j: JString<'local>,
     filepath_j: jint
     ) 
     {
-    let filename = match env.get_string(&filename_j) {
-        Ok(name) => name.into(),
+    let filename: String = match env.get_string(filename_j) {
+        Ok(name) => String::from(name),
         Err(e) => {
             eprintln!("{:?}", e);
             return;
@@ -80,14 +80,14 @@ pub extern "system" fn Java_com_nmaster23_rustdrop_android_MainActivity_FilePick
 }
 
 #[cfg(target_os = "android")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_com_nmaster23_rustdrop_android_MainActivity_onBlueChunkReceived<'local>(
     env: JNIEnv<'local>,
     _class: JClass<'local>,
-    chunk_j: JByteArray<'local>,
+    chunk_j: jbyteArray,
 ) {
     // Safely convert Java byte[] to Rust Vec<u8>
-    if let Ok(chunk) = env.convert_byte_array(&chunk_j) {
+    if let Ok(chunk) = env.convert_byte_array(chunk_j) {
         if let Some(sender_mutex) = BLE_SENDER.get() {
             let sender = sender_mutex.lock().unwrap();
             let _ = sender.send(chunk);
@@ -95,9 +95,10 @@ pub extern "system" fn Java_com_nmaster23_rustdrop_android_MainActivity_onBlueCh
     }
 }
 
-#[unsafe(no_mangle)] 
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
 fn android_main(app: slint::android::AndroidApp) {
     slint::android::init(app).unwrap();
-    let main_window = ..;
+    let main_window = AppWindow::new().unwrap();
     main_window.run().unwrap();
 }

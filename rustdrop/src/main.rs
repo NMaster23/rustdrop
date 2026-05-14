@@ -201,13 +201,12 @@ async fn receive_file_blue() {
     loop {
         let chunk_result = {
             let rx = crate::BLE_RECEIVER.get().unwrap().lock().unwrap();
-            rx.recv_timeout(Duration::from_secs(1));
+            rx.recv_timeout(Duration::from_secs(1))
         };
         match chunk_result {
             Ok(chunk) => {
                 received_data.extend_from_slice(&chunk);
             }
-            Ok(None) => break,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 if received_data.len() > 1 {
                     let name_len = received_data[0] as usize;
@@ -492,12 +491,6 @@ async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>) {
     ui_handle.upgrade_in_event_loop(move |ui| {
         ui.on_send_select_device_wifi(move |device_ip: SharedString| {
             crate::open_picker();
-            std::thread::spawn(move || {
-                let (filename, file) = {
-                    let rx = crate::FILE_RECEIVER.get().unwrap().lock().unwrap();
-                    rx.recv().unwrap()
-                };
-            });
             let path_str = file.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
             send_file_wifi(device_ip.to_string(), 5200, &path_str);
         });
