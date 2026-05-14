@@ -179,6 +179,55 @@ async fn receive_file_blue() {
     }
 }
 
+#[cfg(target_os = "android")]
+async fn receive_file_blue() {
+    let (sender_tx, mut receiver_rx) = channel::<PeripheralEvent>(256);
+    let mut peripheral = Peripheral::new(sender_tx).await.unwrap();
+    while !peripheral.is_powered().await.unwrap() {}
+    peripheral.add_service(
+        &Service {
+            uuid: TARGET_SERVICE,
+            primary: true,
+            characteristics: vec![
+                Characteristic {
+                    uuid: TARGET_CHAR,
+                    ..Default::default()
+                }
+            ],
+        }
+    ).await;
+    peripheral.start_advertising("RustDrop", &[TARGET_SERVICE]).await;
+    let mut received_data = Vec::new();
+    loop {
+        let chunk_result = {
+            let rx = crate::BLE_RECEIVER.get().unwrap().lock().unwrap();
+            rx.recv_timeout(Duration::from_secs(1));
+        };
+        match chunk_result {
+            Ok(chunk) => {
+                received_data.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if received_data.len() > 1 {
+                    let name_len = received_data[0] as usize;
+                    if received_data.len() > name_len {
+                        let filename = String::from_utf8_lossy(&received_data[1..name_len + 1]).to_string();
+                        let file_data = &received_data[name_len + 1..];
+                        println!("Received file {} with {} bytes", filename, file_data.len());
+                        let _ = async_std::fs::write(&filename, file_data).await;
+                    }
+                }
+                received_data.clear();   
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                println!("Disconnect");
+                break;
+            }
+        }
+    }
+}
+
 #[cfg(not(target_os = "android"))]
 async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
     let adapter = Arc::new(Adapter::default().await.ok_or("Bluetooth adapter not found").unwrap());
