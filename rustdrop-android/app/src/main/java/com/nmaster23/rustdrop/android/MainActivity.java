@@ -14,6 +14,7 @@ import androidx.appcompat.app.AppCompatActivity;
 public class MainActivity extends AppCompatActivity {
     private static final int PICK_FILE = 2;
     public native void initJniBridge();
+    public native void onBlueChunkReceived(byte[] chunk);
     public native void FilePicker(String filename, int filepath);
     static {
         System.loadLibrary("rustdrop");
@@ -24,6 +25,7 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         instance = this;
         initJniBridge();
+        startBleServer();
     }
 
     public static void FilePickerTrigger() {
@@ -74,5 +76,43 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         }
+    }
+    public void startBleServer() {
+        BluetoothManager bluetoothManager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+        BluetoothAdapter bluetoothAdapter = bluetoothManager.getAdapter();
+        BluetoothGattServer gattServer = bluetoothManager.openGattServer(this, new BluetoothGattServerCallback() {
+            @Override
+            public void onCharacteristicWriteRequest(BluetoothDevice device, int requestId, BluetoothGattCharacteristic characteristic, boolean preparedWrite, boolean responseNeeded, int offset, byte[] value) {
+                super.onCharacteristicWriteRequest(device, requestId, characteristic, preparedWrite, responseNeeded, offset, value);
+                onBlueChunkReceived(value);
+
+                if (responseNeeded) {
+                    
+                }
+            }
+        });
+        UUID SERVICE_UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef0");
+        UUID CHAR_UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef1");
+
+        BluetoothGattService service = new BluetoothGattService(SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY);
+        BluetoothGattCharacteristic characteristic = new BluetoothGattCharacteristic(CHAR_UUID,
+                BluetoothGattCharacteristic.PROPERTY_WRITE, BluetoothGattCharacteristic.PERMISSION_WRITE);
+        service.addCharacteristic(characteristic);
+        gattServer.addService(service);
+        BluetoothLeAdvertiser advertiser = bluetoothAdapter.getBluetoothLeAdvertiser();
+        AdvertiseSettings settings = new AdvertiseSettings.Builder()
+                .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+                .setConnectable(true).build();
+                
+        AdvertiseData data = new AdvertiseData.Builder()
+                .setIncludeDeviceName(true)
+                .addServiceUuid(new ParcelUuid(SERVICE_UUID)).build();
+
+        advertiser.startAdvertising(settings, data, new AdvertiseCallback() {
+            @Override
+            public void onStartSuccess(AdvertiseSettings settingsInEffect) {
+                System.out.println("Android BLE Server Started!");
+            }
+        });
     }
 }
