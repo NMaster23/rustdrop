@@ -28,6 +28,10 @@ use ble_peripheral_rust::{
     Peripheral, PeripheralImpl,
 };
 use tokio::sync::mpsc::channel;
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 slint::include_modules!();
 

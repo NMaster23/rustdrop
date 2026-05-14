@@ -13,9 +13,23 @@ import androidx.appcompat.app.AppCompatActivity;
 
 public class MainActivity extends AppCompatActivity {
     private static final int PICK_FILE = 2;
+    public native void initJniBridge();
     public native void FilePicker(String filename, int filepath);
     static {
         System.loadLibrary("rustdrop");
+    }
+
+    @Override
+    protected void onCreate(bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        instance = this;
+        initJniBridge();
+    }
+
+    public static void FilePickerTrigger() {
+        if (instance != null) {
+            instance.openFile(null);
+        }
     }
 
     private void openFile(Uri pickerInitialUri) {
