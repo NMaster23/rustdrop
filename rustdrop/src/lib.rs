@@ -1,3 +1,6 @@
+#[cfg(feature = "uniffi")]
+uniffi::include_scaffolding!("ui");
+
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 fn android_main(app: slint::android::AndroidApp) {
