@@ -4889,6 +4889,7 @@ dependencies = [
  "slint-build",
  "tokio",
  "uniffi",
+ "uniffi_bindgen",
 ]
 
 [[package]]

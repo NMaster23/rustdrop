@@ -1,10 +1,18 @@
-#[cfg(feature = "uniffi")]
-uniffi::include_scaffolding!("ui");
+#![cfg(target_os = "android")]
 
-#[cfg(target_os = "android")]
-#[unsafe(no_mangle)]
-fn android_main(app: slint::android::AndroidApp) {
-    slint::android::init(app).unwrap();
-    let main_window = AppWindow::new().unwrap();
-    main_window.run().unwrap();
+mod bluetooth;
+mod wifi;
+
+uniffi::setup_scaffolding!();
+
+#[derive(uniffi::Record)]
+pub struct BlueData {
+    pub identifier: String,
+    pub signal_strength: String,
+    pub service_uuid: Vec<String>,
+}
+
+#[uniffi::export(with_foreign)]
+pub trait RustDropUiCallback: Send + Sync {
+    fn on_device_discovered(&self, device: BlueData);
 }
