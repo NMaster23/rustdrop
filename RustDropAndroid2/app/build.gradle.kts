@@ -13,7 +13,7 @@ android {
 
     defaultConfig {
         applicationId = "com.nmaster23.rustdrop.android"
-        minSdk = 33
+        minSdk = 29
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
