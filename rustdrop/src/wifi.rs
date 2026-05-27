@@ -1,3 +1,4 @@
+#[cfg(not(target_os = "android"))]
 use crate::{AppWindow, WifiDevice};
 
 use mdns_sd::{ServiceDaemon, ServiceInfo, ServiceEvent};
@@ -6,6 +7,7 @@ use std::net::{TcpListener, TcpStream};
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::rc::Rc;
+#[cfg(not(target_os = "android"))]
 use rfd::FileDialog;
 use chunked_transfer::{Encoder, Decoder};
 
@@ -117,4 +119,9 @@ pub(crate) async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>)
             send_file_wifi(device_ip.to_string(), 5200, &path_str);
         });
     });
+}
+
+#[cfg(target_os = "android")]
+pub(crate) async fn wifi() {
+    // Empty stub for Android
 }

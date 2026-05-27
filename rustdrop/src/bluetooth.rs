@@ -1,13 +1,18 @@
+#[cfg(not(target_os = "android"))]
 use crate::{AppWindow, BlueDevice};
+#[cfg(target_os = "android")]
+use crate::RustDropUiCallback;
 
 use async_std::stream::StreamExt;
 use bluest::*;
 use std::rc::Rc;
+#[cfg(not(target_os = "android"))]
 use rfd::FileDialog;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use async_std::future::timeout;
 use std::time::Duration;
+#[cfg(not(target_os = "android"))]
 use ble_peripheral_rust::{
     gatt::{
         characteristic::Characteristic,
@@ -18,8 +23,10 @@ use ble_peripheral_rust::{
     },
     Peripheral, PeripheralImpl,
 };
+#[cfg(not(target_os = "android"))]
 use tokio::sync::mpsc::channel;
 
+#[cfg(not(target_os = "android"))]
 struct BlueData {
     identifier: String,
     signal_strength: String,
@@ -112,6 +119,16 @@ pub(crate) async fn receive_file_blue() {
     }
 }
 
+#[cfg(target_os = "android")]
+pub(crate) async fn receive_file_blue() {
+    // Empty stub for Android
+}
+
+#[cfg(target_os = "android")]
+async fn send_file_blue(device: &Device, file_path: &str) {
+    // Empty stub for Android
+}
+
 #[cfg(not(target_os = "android"))]
 pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
     let adapter = Arc::new(Adapter::default().await.ok_or("Bluetooth adapter not found").unwrap());
@@ -201,32 +218,5 @@ pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
 
 #[cfg(target_os = "android")]
 pub(crate) async fn bluetooth(callback: Arc<dyn RustDropUiCallback>, is_scanning: Arc<Mutex<bool>>, identifier_name: Arc<std::sync::Mutex<HashMap<String, Device>>>,) {
-    let adapter = Arc::new(Adapter::default().await.ok_or("Bluetooth adapter not found").unwrap());
-    let adapter_ui = Arc::clone(&adapter);
-    let adapter_disconnect = Arc::clone(&adapter);
-    let adapter_timeout = adapter.wait_available();
-    if let Err(_) = timeout(Duration::from_secs(1), adapter_timeout).await {
-        println!("Please check whether your device supports Bluetooth, or if your Bluetooth is turned off.");
-        return;
-    }
-    println!("starting scan");
-    let mut scan = adapter.scan(&[]).await.unwrap();
-    println!("scan started");
-    while let Some(discovered_device) = scan.next().await {
-        if !*is_scanning.lock().unwrap() {
-            println!("Scan stopped");
-            break;
-        }
-        let uuid_string: Vec<String> = discovered_device.adv_data.services.iter().map(|x| x.to_string()).collect();
-        let blue_data = BlueData {
-            identifier: discovered_device.device.name().as_deref().unwrap_or("(unknown)").to_string(),
-            signal_strength: discovered_device.rssi.map(|x| format!(" ({}dBm)", x)).unwrap_or_default(),
-            service_uuid: uuid_string
-        };
-        let hashmap_identifier = discovered_device.device.clone();
-        let debug = discovered_device.device.name().as_deref().unwrap_or("(unknown)").to_string();
-        let mut hashmap = identifier_name_map.lock().unwrap();
-        hashmap.insert(blue_data.identifier.clone(), hashmap_identifier);
-        callback.on_device_discovered(blue_data);
-    }
+    println!("Bluetooth functionality is not implemented on Android.");
 }

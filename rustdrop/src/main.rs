@@ -1,3 +1,4 @@
+#[cfg(not(target_os = "android"))]
 mod bluetooth;
 mod wifi;
 
@@ -9,8 +10,11 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
+#[cfg(not(target_os = "android"))]
 slint::include_modules!();
 
+
+#[cfg(not(target_os = "android"))]
 #[async_std::main]
 async fn main() -> Result<(), Error> {
     let ui = AppWindow::new().unwrap();
@@ -30,4 +34,9 @@ async fn main() -> Result<(), Error> {
     });
     ui.run().expect("UI Initialization Error");
     Ok(())
+}
+
+#[cfg(target_os = "android")]
+fn main() {
+    println!("Running on Android");
 }
