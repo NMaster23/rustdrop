@@ -3,7 +3,7 @@
 
 @file:Suppress("NAME_SHADOWING")
 
-package com.nmaster23.rustdrop.android
+package uniffi.rustdrop
 
 // Common helper code.
 //

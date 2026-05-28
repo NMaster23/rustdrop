@@ -217,6 +217,6 @@ pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
 }
 
 #[cfg(target_os = "android")]
-pub(crate) async fn bluetooth(callback: Arc<dyn RustDropUiCallback>, is_scanning: Arc<Mutex<bool>>, identifier_name: Arc<std::sync::Mutex<HashMap<String, Device>>>,) {
+pub(crate) async fn bluetooth(callback: Arc<dyn RustDropUiCallback>) {
     println!("Bluetooth functionality is not implemented on Android.");
 }

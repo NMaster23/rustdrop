@@ -32,7 +32,7 @@ impl RustDropCore {
     pub async fn start_blue(&self) {
         let cb_arc = self.callback.lock().unwrap().clone();
         #[cfg(target_os = "android")]
-        bluetooth::bluetooth(cb_arc).await;
+        bluetooth::bluetooth(cb_arc.unwrap()).await;
     }
 }
 
