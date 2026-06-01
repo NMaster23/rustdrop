@@ -25,8 +25,11 @@ import androidx.compose.ui.tooling.preview.Preview
 import com.nmaster23.rustdrop.android.ui.theme.RustDropAndroidTheme
 import androidx.compose.material3.Button
 import androidx.compose.foundation.layout.Column
+import android.location.LocationManager
 import java.util.UUID
-import androidx.core.content.ContextCompat.startActivity
+import android.os.Build
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
 import android.Manifest
 import android.bluetooth.BluetoothDevice
 import android.content.BroadcastReceiver
@@ -92,6 +95,17 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit) {
     val context = LocalContext.current
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions.entries.all { it.value }
+        if (granted) {
+            discoveredDevices.clear()
+            Bluetooth(context)
+        } else {
+            Toast.makeText(context, "Permissions required for discovery", Toast.LENGTH_SHORT).show()
+        }
+    }
     Column(
         modifier = modifier.fillMaxSize(),
         verticalArrangement = Arrangement.Center,
@@ -111,8 +125,16 @@ fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit) {
         Spacer(modifier = Modifier.height(20.dp))
         Button(
             onClick = {
-                discoveredDevices.clear()
-                Bluetooth(context)
+                val permissions = mutableListOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    permissions.add(Manifest.permission.BLUETOOTH_SCAN)
+                    permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+                }
+                
+                permissionLauncher.launch(permissions.toTypedArray())
             },
             modifier = Modifier.size(width = 250.dp, height = 80.dp)
         ) {
@@ -125,8 +147,9 @@ fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             items(discoveredDevices.values.toList()) { device ->
+                val deviceName = try { device.name } catch (_: SecurityException) { null }
                 Text(
-                    text = "${device.address} (${device.address})",
+                    text = "${deviceName ?: "Unknown Device"} (${device.address})",
                     modifier = Modifier.padding(8.dp)
                 )
             }
@@ -145,23 +168,41 @@ fun GreetingPreview() {
 fun Bluetooth(context: Context) {
     val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
-    if (bluetoothAdapter?.state == BluetoothAdapter.STATE_OFF) {
-        if (ActivityCompat.checkSelfPermission(
-                context,
-                Manifest.permission.BLUETOOTH_CONNECT
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
-            val intentEnable = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-            context.startActivity(intentEnable)
-        }
+
+    if (bluetoothAdapter == null) {
+        Toast.makeText(context, "Bluetooth not supported", Toast.LENGTH_SHORT).show()
+        return
     }
-    if (ActivityCompat.checkSelfPermission(
-            context,
-            Manifest.permission.BLUETOOTH_SCAN
-        ) == PackageManager.PERMISSION_GRANTED || android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S
-    ) {
-        if (bluetoothAdapter?.isDiscovering == false) {
-            bluetoothAdapter.startDiscovery()
+
+    if (!bluetoothAdapter.isEnabled) {
+        Toast.makeText(context, "Please enable Bluetooth", Toast.LENGTH_SHORT).show()
+        return
+    }
+
+    // Check if Location Services are enabled (required for discovery)
+    val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    val isLocationEnabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+            locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+            
+    if (!isLocationEnabled) {
+        Toast.makeText(context, "Please turn on System Location/GPS", Toast.LENGTH_LONG).show()
+        return
+    }
+
+    val hasScanPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
+    } else {
+        ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    }
+
+    if (hasScanPermission) {
+        if (bluetoothAdapter.isDiscovering) {
+            bluetoothAdapter.cancelDiscovery()
+        }
+        if (bluetoothAdapter.startDiscovery()) {
+            Toast.makeText(context, "Discovery started...", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "Failed to start discovery. Try toggling Bluetooth.", Toast.LENGTH_LONG).show()
         }
     }
 }
@@ -170,7 +211,12 @@ private val receiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
             BluetoothDevice.ACTION_FOUND -> {
-                val device: BluetoothDevice? = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                }
                 device?.let {
                     discoveredDevices[it.address] = it
                 }
