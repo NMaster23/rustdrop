@@ -1,58 +1,43 @@
 package com.nmaster23.rustdrop.android
 
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothManager
+import android.Manifest
+import android.bluetooth.*
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
+import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.Context
-import android.content.Intent
+import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
-import android.view.View
-import android.widget.Button
+import android.os.ParcelUuid
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
-import com.nmaster23.rustdrop.android.ui.theme.RustDropAndroidTheme
-import androidx.compose.material3.Button
-import androidx.compose.foundation.layout.Column
-import android.location.LocationManager
-import java.util.UUID
-import android.os.Build
-import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import android.Manifest
-import android.bluetooth.BluetoothDevice
-import android.content.BroadcastReceiver
-import android.content.pm.PackageManager
-import androidx.core.app.ActivityCompat
-import android.content.IntentFilter
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.height
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.ui.draw.clip
+import androidx.compose.material3.Button
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.app.ActivityCompat
+import com.nmaster23.rustdrop.android.ui.theme.RustDropAndroidTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.HashMap
+import java.util.*
 
 private var selectedUri by mutableStateOf<Uri?>(null)
 private val discoveredDevices = mutableStateMapOf<String, BluetoothDevice>()
@@ -69,8 +54,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
-        registerReceiver(receiver, filter)
         enableEdgeToEdge()
         setContent {
             RustDropAndroidTheme {
@@ -78,19 +61,12 @@ class MainActivity : ComponentActivity() {
                     Greeting(
                         modifier = Modifier.padding(innerPadding),
                         onOpenFile = { openFile() },
-
                     )
                 }
             }
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        try {
-            unregisterReceiver(receiver)
-        } catch (_: Exception) { }
-    }
     fun openFile() {
         openDocumentLauncher.launch(arrayOf("*/*"))
     }
@@ -106,11 +82,12 @@ fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit) {
         val granted = permissions.entries.all { it.value }
         if (granted) {
             discoveredDevices.clear()
-            Bluetooth(context)
+            startBleScan(context)
         } else {
             Toast.makeText(context, "Permissions required", Toast.LENGTH_SHORT).show()
         }
     }
+
     Column(
         modifier = modifier.fillMaxSize(),
         verticalArrangement = Arrangement.Center,
@@ -137,6 +114,7 @@ fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     permissions.add(Manifest.permission.BLUETOOTH_SCAN)
                     permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+                    permissions.add(Manifest.permission.BLUETOOTH_ADVERTISE)
                 }
                 
                 permissionLauncher.launch(permissions.toTypedArray())
@@ -160,29 +138,7 @@ fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit) {
                         } else true
 
                         if (connectPermission) {
-                            scope.launch(Dispatchers.IO) {
-                                try {
-                                    withContext(Dispatchers.Main) {
-                                        Toast.makeText(context, "Connecting to ${device.address}...", Toast.LENGTH_SHORT).show()
-                                    }
-                                    
-                                    val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-                                    val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
-                                    val remoteDevice = bluetoothAdapter?.getRemoteDevice(device.address)
-                                    val socket = remoteDevice?.createRfcommSocketToServiceRecord(targetService)
-                                    
-                                    socket?.connect()
-                                    
-                                    withContext(Dispatchers.Main) {
-                                        Toast.makeText(context, "Connected!", Toast.LENGTH_SHORT).show()
-                                    }
-                                    
-                                } catch (e: Exception) {
-                                    withContext(Dispatchers.Main) {
-                                        Toast.makeText(context, "Connection failed: ${e.message}", Toast.LENGTH_LONG).show()
-                                    }
-                                }
-                            }
+                            connectToBleDevice(context, device, scope)
                         } else {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                                 permissionLauncher.launch(arrayOf(Manifest.permission.BLUETOOTH_CONNECT))
@@ -197,20 +153,13 @@ fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit) {
     }
 }
 
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    RustDropAndroidTheme {
-        Greeting(onOpenFile = {})
-    }
-}
-
-fun Bluetooth(context: Context) {
+fun startBleScan(context: Context) {
     val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-    val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
+    val bluetoothAdapter = bluetoothManager.adapter
+    val scanner = bluetoothAdapter.bluetoothLeScanner
 
-    if (bluetoothAdapter == null) {
-        Toast.makeText(context, "Bluetooth not supported", Toast.LENGTH_SHORT).show()
+    if (scanner == null) {
+        Toast.makeText(context, "BLE Scanner not available", Toast.LENGTH_SHORT).show()
         return
     }
 
@@ -227,6 +176,25 @@ fun Bluetooth(context: Context) {
         return
     }
 
+    val filter = ScanFilter.Builder()
+        .setServiceUuid(ParcelUuid(targetService))
+        .build()
+
+    val settings = ScanSettings.Builder()
+        .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+        .build()
+
+    val scanCallback = object : ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: ScanResult) {
+            val device = result.device
+            discoveredDevices[device.address] = device
+        }
+
+        override fun onScanFailed(errorCode: Int) {
+            Toast.makeText(context, "Scan failed: $errorCode", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     val hasScanPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
     } else {
@@ -234,31 +202,121 @@ fun Bluetooth(context: Context) {
     }
 
     if (hasScanPermission) {
-        if (bluetoothAdapter.isDiscovering) {
-            bluetoothAdapter.cancelDiscovery()
-        }
-        if (bluetoothAdapter.startDiscovery()) {
-            Toast.makeText(context, "Discovery started...", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(context, "Failed to start discovery. Try toggling Bluetooth.", Toast.LENGTH_LONG).show()
-        }
+        scanner.startScan(listOf(filter), settings, scanCallback)
+        Toast.makeText(context, "BLE Scan started...", Toast.LENGTH_SHORT).show()
     }
 }
 
-private val receiver = object : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) {
-        when (intent.action) {
-            BluetoothDevice.ACTION_FOUND -> {
-                val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
-                } else {
-                    @Suppress("DEPRECATION")
-                    intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+fun connectToBleDevice(context: Context, device: BluetoothDevice, scope: kotlinx.coroutines.CoroutineScope) {
+    val gattCallback = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                scope.launch {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Connected! Discovering services...", Toast.LENGTH_SHORT).show()
+                    }
                 }
-                device?.let {
-                    discoveredDevices[it.address] = it
+                if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                    gatt.discoverServices()
+                }
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                scope.launch {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "Disconnected", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                gatt.close()
+            }
+        }
+
+        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                val service = gatt.getService(targetService)
+                val characteristic = service?.getCharacteristic(targetChar)
+                if (characteristic != null) {
+                    scope.launch {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "Target service and characteristic found!", Toast.LENGTH_LONG).show()
+                        }
+                        // Here you would implement the file sending logic over BLE
+                        sendFileOverBle(context, gatt, characteristic)
+                    }
+                } else {
+                    scope.launch {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "Target characteristic not found", Toast.LENGTH_SHORT).show()
+                        }
+                    }
                 }
             }
         }
+    }
+
+    if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+        device.connectGatt(context, false, gattCallback)
+    }
+}
+
+fun sendFileOverBle(context: Context, gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+    val uri = selectedUri ?: return
+    val contentResolver = context.contentResolver
+    
+    try {
+        val inputStream = contentResolver.openInputStream(uri) ?: return
+        val fileBytes = inputStream.readBytes()
+        inputStream.close()
+        
+        val fileName = getFileName(context, uri).toByteArray()
+        val toSend = mutableListOf<Byte>()
+        toSend.add(fileName.size.toByte())
+        toSend.addAll(fileName.toList())
+        toSend.addAll(fileBytes.toList())
+        
+        val data = toSend.toByteArray()
+        
+        // BLE chunked sending logic
+        // For simplicity, we'll just send the first chunk here.
+        // In a real app, you'd handle the MTU and write callbacks.
+        
+        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            val mtu = 512 // Default MTU is usually smaller, but let's assume we can request more or it's handled.
+            // Simplified sending:
+            characteristic.value = data.copyOfRange(0, minOf(data.size, 20)) // Standard BLE chunk size
+            gatt.writeCharacteristic(characteristic)
+        }
+        
+    } catch (e: Exception) {
+        Toast.makeText(context, "Failed to read file: ${e.message}", Toast.LENGTH_SHORT).show()
+    }
+}
+
+fun getFileName(context: Context, uri: Uri): String {
+    var result: String? = null
+    if (uri.scheme == "content") {
+        val cursor = context.contentResolver.query(uri, null, null, null, null)
+        try {
+            if (cursor != null && cursor.moveToFirst()) {
+                val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (index != -1) result = cursor.getString(index)
+            }
+        } finally {
+            cursor?.close()
+        }
+    }
+    if (result == null) {
+        result = uri.path
+        val cut = result?.lastIndexOf('/')
+        if (cut != null && cut != -1) {
+            result = result?.substring(cut + 1)
+        }
+    }
+    return result ?: "unknown_file"
+}
+
+@Preview(showBackground = true)
+@Composable
+fun GreetingPreview() {
+    RustDropAndroidTheme {
+        Greeting(onOpenFile = {})
     }
 }

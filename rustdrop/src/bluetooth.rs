@@ -193,6 +193,9 @@ pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
                 println!("Scan stopped");
                 break;
             }
+            if !discovered_device.adv_data.services.contains(&TARGET_SERVICE) {
+                continue;
+            }
             let blue_data = BlueData {
                 identifier: discovered_device.device.name().as_deref().unwrap_or("(unknown)").to_string(),
                 signal_strength: discovered_device.rssi.map(|x| format!(" ({}dBm)", x)).unwrap_or_default(),
