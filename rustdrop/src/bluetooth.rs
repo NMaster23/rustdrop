@@ -119,16 +119,6 @@ pub(crate) async fn receive_file_blue() {
     }
 }
 
-#[cfg(target_os = "android")]
-pub(crate) async fn receive_file_blue() {
-    // Empty stub for Android
-}
-
-#[cfg(target_os = "android")]
-async fn send_file_blue(device: &Device, file_path: &str) {
-    // Empty stub for Android
-}
-
 #[cfg(not(target_os = "android"))]
 pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
     let adapter = Arc::new(Adapter::default().await.ok_or("Bluetooth adapter not found").unwrap());
@@ -217,9 +207,4 @@ pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
             }).unwrap();
         }
     }
-}
-
-#[cfg(target_os = "android")]
-pub(crate) async fn bluetooth(callback: Arc<dyn RustDropUiCallback>) {
-    println!("Bluetooth functionality is not implemented on Android.");
 }

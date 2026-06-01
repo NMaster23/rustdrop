@@ -120,8 +120,3 @@ pub(crate) async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>)
         });
     });
 }
-
-#[cfg(target_os = "android")]
-pub(crate) async fn wifi() {
-    // Empty stub for Android
-}
