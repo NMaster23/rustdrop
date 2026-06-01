@@ -48,6 +48,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.HashMap
 
 private var selectedUri by mutableStateOf<Uri?>(null)
@@ -95,6 +99,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -103,7 +108,7 @@ fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit) {
             discoveredDevices.clear()
             Bluetooth(context)
         } else {
-            Toast.makeText(context, "Permissions required for discovery", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Permissions required", Toast.LENGTH_SHORT).show()
         }
     }
     Column(
@@ -143,15 +148,50 @@ fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit) {
         Spacer(modifier = Modifier.height(25.dp))
         Text("Discovered: ", fontSize = 20.sp)
         LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxSize(),
+            modifier = Modifier.weight(1f).fillMaxSize().padding(horizontal = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             items(discoveredDevices.values.toList()) { device ->
                 val deviceName = try { device.name } catch (_: SecurityException) { null }
-                Text(
-                    text = "${deviceName ?: "Unknown Device"} (${device.address})",
-                    modifier = Modifier.padding(8.dp)
-                )
+                Button(
+                    onClick = {
+                        val connectPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+                        } else true
+
+                        if (connectPermission) {
+                            scope.launch(Dispatchers.IO) {
+                                try {
+                                    withContext(Dispatchers.Main) {
+                                        Toast.makeText(context, "Connecting to ${device.address}...", Toast.LENGTH_SHORT).show()
+                                    }
+                                    
+                                    val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+                                    val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
+                                    val remoteDevice = bluetoothAdapter?.getRemoteDevice(device.address)
+                                    val socket = remoteDevice?.createRfcommSocketToServiceRecord(targetService)
+                                    
+                                    socket?.connect()
+                                    
+                                    withContext(Dispatchers.Main) {
+                                        Toast.makeText(context, "Connected!", Toast.LENGTH_SHORT).show()
+                                    }
+                                    
+                                } catch (e: Exception) {
+                                    withContext(Dispatchers.Main) {
+                                        Toast.makeText(context, "Connection failed: ${e.message}", Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            }
+                        } else {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                permissionLauncher.launch(arrayOf(Manifest.permission.BLUETOOTH_CONNECT))
+                            }
+                        }
+                    }
+                ) {
+                    Text(text = deviceName ?: device.address)
+                }
             }
         }
     }
@@ -178,8 +218,6 @@ fun Bluetooth(context: Context) {
         Toast.makeText(context, "Please enable Bluetooth", Toast.LENGTH_SHORT).show()
         return
     }
-
-    // Check if Location Services are enabled (required for discovery)
     val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
     val isLocationEnabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
             locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
