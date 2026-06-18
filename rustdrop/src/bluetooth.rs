@@ -54,9 +54,11 @@ async fn send_file_blue(device: &Device, file_path: &str) {
             }
         }
     }
-    let file_name = std::path::Path::new(file_path).file_name().unwrap().to_str().unwrap().as_bytes();
+    let file_name_str = std::path::Path::new(file_path).file_name().and_then(|name| name.to_str()).unwrap_or("unknown_file");
+    let file_name = file_name_str.as_bytes();
     let file_bytes = std::fs::read(file_path).expect("Failed to read file");
     let mut to_send = Vec::new();
+    to_send.extend_from_slice(&file_size); 
     to_send.push(file_name.len() as u8);
     to_send.extend_from_slice(file_name);
     to_send.extend_from_slice(&file_bytes);
@@ -93,8 +95,8 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
     let mut received_data = Vec::new();
     let mut is_receiving = false;
     loop {
-        match timeout(Duration::from_secs(1), receiver_rx.recv()).await {
-            Ok(Some(event)) => {
+        match receiver_rx.recv().await {
+            Some(event) => {
                 match event {
                     PeripheralEvent::WriteRequest { request: _, value, offset: _, responder } => {
                         if !is_receiving {
@@ -108,12 +110,16 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                     _ => {}
                 }
             },
-            Ok(None) => break,
+            None => break,
             Err(_) => {
                 if received_data.len() > 1 {
                     let name_len = received_data[0] as usize;
                     if received_data.len() > name_len {
-                        let filename = String::from_utf8_lossy(&received_data[1..name_len + 1]).to_string();
+                        let mut filename = String::from_utf8_lossy(&received_data[1..name_len + 1]).to_string();
+                        filename = filename.chars().filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_').collect();
+                        if filename.is_empty() {
+                            filename = "RustDrop_Received_File".to_string();
+                        }
                         let file_data = &received_data[name_len + 1..];
                         let mut save_path = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
                         save_path.push(&filename);
@@ -177,9 +183,11 @@ pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
                 let file = FileDialog::new()
                     .set_directory("/")
                     .pick_file();
-                let path_str = file.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-                println!("{}", path_str);
-                send_file_blue(&device_file, &path_str).await;
+                if let Some(path) = file {
+                    let path_str = path.to_string_lossy().into_owned();
+                    println!("{}", path_str);
+                    send_file_blue(&device_file, &path_str).await;
+                }
             });
         });
         ui.on_disconnect(move || {

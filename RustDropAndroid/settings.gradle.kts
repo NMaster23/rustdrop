@@ -22,6 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "RustDrop Android"
+rootProject.name = "RustdropAndroid"
 include(":app")
- 

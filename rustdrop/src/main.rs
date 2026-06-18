@@ -23,8 +23,10 @@ async fn main() -> Result<(), Error> {
 
     let file_accepted = std::sync::Arc::new(std::sync::Mutex::new(false));
     let file_accepted_clone = std::sync::Arc::clone(&file_accepted);
+    let ui_accept_clone = ui_clone.clone();
     ui.on_file_accept(move || {
         *file_accepted_clone.lock().unwrap() = true;
+        let _ = ui_accept_clone.upgrade_in_event_loop(|ui| ui.set_receiving_file(false));
     });
 
     let ui_blue_recv = ui_clone.clone();

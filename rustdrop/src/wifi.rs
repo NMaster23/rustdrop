@@ -19,7 +19,7 @@ fn send_file_wifi(ip: String, port: u32, file_path: &str) {
     if let Ok(mut stream) = TcpStream::connect(&addr) {
         println!("Connected to the server!");
         if let Ok(mut file) = File::open(file_path) {
-            let decoded = std::path::Path::new(file_path).file_name().unwrap().to_str().unwrap().as_bytes();
+            let decoded = std::path::Path::new(file_path).file_name().and_then(|name| name.to_str()).unwrap_or("unknown_file").as_bytes();
             let mut encoded: Vec<u8> = vec![];
             {
                 let mut encoder = Encoder::with_chunks_size(&mut encoded, 8192);
@@ -60,6 +60,11 @@ async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std
                 let mut filename_u8 = &filename_buf as &[u8];
                 let mut filename_decoder = Decoder::new(&mut filename_u8);
                 let _ = filename_decoder.read_to_string(&mut filename);
+                
+                while !*file_accepted.lock().unwrap() {
+                    async_std::task::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                
                 let mut save_path = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
                 save_path.push(&filename);
                 let mut file = File::create(&save_path).unwrap();
@@ -68,9 +73,6 @@ async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std
                 match io::copy(&mut socket, &mut file) {
                     Ok(bytes) => {
                         println!("Received {} bytes and saved to {:?}", bytes, save_path);
-                        while !*file_accepted.lock().unwrap() {
-                            async_std::task::sleep(std::time::Duration::from_millis(100)).await;
-                        }
                         let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_receiving_file(false));
                     },
                     Err(e) => println!("Error during reception: {}", e),
@@ -126,8 +128,10 @@ pub(crate) async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>,
             let file = FileDialog::new()
                 .set_directory("/")
                 .pick_file();
-            let path_str = file.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-            send_file_wifi(device_ip.to_string(), 5200, &path_str);
+            if let Some(path) = file {
+                let path_str = path.to_string_lossy().into_owned();
+                send_file_wifi(device_ip.to_string(), 5200, &path_str);
+            }
         });
     });
 }
