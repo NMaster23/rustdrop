@@ -45,10 +45,17 @@ val targetService: UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef0"
 val targetChar: UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef1")
 
 class MainActivity : ComponentActivity() {
+    private var pendingDevice: BluetoothDevice? = null
+    
     private val openDocumentLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         selectedUri = uri
+        if (uri != null) {
+            pendingDevice?.let { device ->
+                pendingDevice = null
+            }
+        }
     }
 
     private var bleScanner: BluetoothLeScanner? = null
@@ -97,7 +104,6 @@ class MainActivity : ComponentActivity() {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     Greeting(
                         modifier = Modifier.padding(innerPadding),
-                        onOpenFile = { openFile() },
                         onStartDiscovery = { startBle() }
                     )
                 }
@@ -110,7 +116,8 @@ class MainActivity : ComponentActivity() {
         stopBle()
     }
 
-    fun openFile() {
+    fun openFileForDevice(device: BluetoothDevice) {
+        pendingDevice = device
         openDocumentLauncher.launch(arrayOf("*/*"))
     }
     private val enableBtLauncher = registerForActivityResult(
@@ -123,19 +130,6 @@ class MainActivity : ComponentActivity() {
 
     private fun checkPermission(permission: String): Boolean {
         return ActivityCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
-    }
-
-    fun sendFile(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, path: Uri) {
-        val name = contentResolver.query(path, null, null, null, null)?.use { it.moveToFirst(); it.getString(it.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME)) } ?: "file"
-        val bytes = byteArrayOf(name.length.toByte()) + name.toByteArray() + (contentResolver.openInputStream(path)?.use { it.readBytes() } ?: return)
-        lifecycleScope.launch(Dispatchers.IO) {
-            bytes.toList().chunked(20).forEach { chunk ->
-                if (checkPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
-                    gatt.writeCharacteristic(characteristic, chunk.toByteArray(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-                    Thread.sleep(20)
-                }
-            }
-        }
     }
 
     private val bluetoothAdapter: BluetoothAdapter? by lazy {
@@ -220,9 +214,8 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit, onStartDiscovery: () -> Unit) {
+fun Greeting(modifier: Modifier = Modifier, onStartDiscovery: () -> Unit) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -248,12 +241,6 @@ fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit, onStartDisco
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(text = selectedUri?.toString() ?: "No file selected", fontSize = 24.sp)
-        Spacer(modifier = Modifier.height(24.dp))
-        Button(onClick = onOpenFile, modifier = Modifier.size(width = 400.dp, height = 150.dp)) {
-            Text("Select File")
-        }
-        Spacer(modifier = Modifier.height(20.dp))
         Button(
             onClick = {
                 val permissions = arrayOf(
@@ -267,7 +254,7 @@ fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit, onStartDisco
             },
             modifier = Modifier.size(width = 250.dp, height = 80.dp)
         ) {
-            Text("Start Discovery")
+            Text("Refresh Discovery")
         }
         Spacer(modifier = Modifier.height(25.dp))
         Text("Discovered Devices:", fontSize = 20.sp)
@@ -279,42 +266,7 @@ fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit, onStartDisco
                 val deviceName = try { device.name } catch (_: SecurityException) { null }
                 Button(
                     onClick = {
-                        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
-                            scope.launch(Dispatchers.IO) {
-                                withContext(Dispatchers.Main) {
-                                    Toast.makeText(context, "Connecting to ${device.address}...", Toast.LENGTH_SHORT).show()
-                                }
-                                device.connectGatt(context, false, object : BluetoothGattCallback() {
-                                    override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-                                        if (newState == BluetoothProfile.STATE_CONNECTED) {
-                                            scope.launch(Dispatchers.Main) {
-                                                Toast.makeText(context, "Connected via GATT!", Toast.LENGTH_SHORT).show()
-                                            }
-                                            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
-                                                gatt.discoverServices()
-                                            }
-                                        }
-                                    }
-
-                                    override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-                                        if (status == BluetoothGatt.GATT_SUCCESS) {
-                                            val service = gatt.getService(targetService)
-                                            val characteristic = service?.getCharacteristic(targetChar)
-                                            if (characteristic != null) {
-                                                scope.launch(Dispatchers.Main) {
-                                                    Toast.makeText(context, "Target Service Found!", Toast.LENGTH_SHORT).show()
-                                                    selectedUri?.let { uri ->
-                                                        (context as? MainActivity)?.sendFile(gatt, characteristic, uri)
-                                                    } ?: run {
-                                                        Toast.makeText(context, "Please select a file first", Toast.LENGTH_SHORT).show()
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                })
-                            }
-                        }
+                        (context as? MainActivity)?.openFileForDevice(device)
                     }
                 ) {
                     Text(text = deviceName ?: device.address)
@@ -328,6 +280,6 @@ fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit, onStartDisco
 @Composable
 fun GreetingPreview() {
     RustDropAndroidTheme {
-        Greeting(onOpenFile = {}, onStartDiscovery = {})
+        Greeting(onStartDiscovery = {})
     }
 }

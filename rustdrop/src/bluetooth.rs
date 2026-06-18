@@ -112,7 +112,11 @@ pub(crate) async fn receive_file_blue() {
                         let mut save_path = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
                         save_path.push(&filename);
                         println!("Received file {} with {} bytes. Saving to {:?}", filename, file_data.len(), save_path);
-                        let _ = async_std::fs::write(&save_path, file_data).await;
+                        if let Err(e) = async_std::fs::write(&save_path, file_data).await {
+                            println!("Error saving file: {}", e);
+                        } else {
+                            println!("File saved successfully to {:?}", save_path);
+                        }
                     }
                 }
                 received_data.clear();   
