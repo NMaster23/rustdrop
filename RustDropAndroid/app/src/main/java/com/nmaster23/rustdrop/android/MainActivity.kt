@@ -1,5 +1,6 @@
 package com.nmaster23.rustdrop.android
 
+import java.io.File
 import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.*
@@ -36,9 +37,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.*
 import android.provider.OpenableColumns
+import android.os.Environment
+import java.io.ByteArrayOutputStream
+import java.io.FileOutputStream
 import androidx.lifecycle.lifecycleScope
 
 private var selectedUri by mutableStateOf<Uri?>(null)
+private var selectedFileName by mutableStateOf<String?>(null)
+private var selectedFileSize by mutableStateOf<Long?>(null)
 private val discoveredDevices = mutableStateMapOf<String, BluetoothDevice>()
 
 val targetService: UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef0")
@@ -46,12 +52,17 @@ val targetChar: UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef1")
 
 class MainActivity : ComponentActivity() {
     private var pendingDevice: BluetoothDevice? = null
+    private val chunksToSend = LinkedList<ByteArray>()
+    private val receiveBuffer = ByteArrayOutputStream()
+    private var isReceiving = false
+    private var saveTimer: Timer? = null
     
     private val openDocumentLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         selectedUri = uri
         if (uri != null) {
+            sendFile(uri)
             pendingDevice?.let { device ->
                 pendingDevice = null
             }
@@ -63,6 +74,64 @@ class MainActivity : ComponentActivity() {
     private var bleAdvertiser: BluetoothLeAdvertiser? = null
 
     private val advertiseCallback = object : AdvertiseCallback() {}
+
+    private val gattClientCallback = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                if (checkPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+                    gatt.discoverServices()
+                }
+            }
+        }
+
+        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                val service = gatt.getService(targetService)
+                val characteristic = service?.getCharacteristic(targetChar)
+                if (characteristic != null && selectedUri != null) {
+                    val nameAsBytes = selectedFileName?.toByteArray(Charsets.UTF_8) ?: byteArrayOf()
+                    val nameLength = nameAsBytes.size.toByte()
+                    val fileAsBytes = contentResolver.openInputStream(selectedUri!!)?.readBytes() ?: byteArrayOf()
+                    
+                    val payload = ByteArray(1 + nameAsBytes.size + fileAsBytes.size)
+                    payload[0] = nameLength
+                    System.arraycopy(nameAsBytes, 0, payload, 1, nameAsBytes.size)
+                    System.arraycopy(fileAsBytes, 0, payload, 1 + nameAsBytes.size, fileAsBytes.size)
+                    
+                    val chunk = 20
+                    chunksToSend.clear()
+                    for (i in payload.indices step chunk) {
+                        val end = minOf(i + chunk, payload.size)
+                        chunksToSend.add(payload.copyOfRange(i, end))
+                    }
+                    sendNextChunk(gatt, characteristic)
+                }
+            }
+        }
+
+        override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS && characteristic.uuid == targetChar) {
+                sendNextChunk(gatt, characteristic)
+            }
+        }
+
+        private fun sendNextChunk(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+            if (chunksToSend.isNotEmpty()) {
+                val nextChunk = chunksToSend.poll()
+                characteristic.value = nextChunk
+                if (checkPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+                    gatt.writeCharacteristic(characteristic)
+                }
+            } else {
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, "File sent successfully", Toast.LENGTH_SHORT).show()
+                }
+                if (checkPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+                    gatt.disconnect()
+                }
+            }
+        }
+    }
 
     private val gattServerCallback = object : BluetoothGattServerCallback() {
         override fun onCharacteristicWriteRequest(
@@ -76,12 +145,14 @@ class MainActivity : ComponentActivity() {
         ) {
             super.onCharacteristicWriteRequest(device, requestId, characteristic, preparedWrite, responseNeeded, offset, value)
             if (responseNeeded && value != null) {
-                if (ActivityCompat.checkSelfPermission(this@MainActivity, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+                if (checkPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
                     gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
                 }
             }
             if (value != null && characteristic?.uuid == targetChar) {
-                println("Received ${value.size} bytes from Rust")
+                receiveBuffer.write(value)
+                isReceiving = true
+                resetSaveFileTimer()
             }
         }
     }
@@ -114,6 +185,24 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         stopBle()
+    }
+
+    fun sendFile(uri: Uri) {
+        contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+            if (cursor.moveToFirst()) {
+                selectedFileName = cursor.getString(nameIndex)
+                selectedFileSize = cursor.getLong(sizeIndex)
+            }
+        }
+
+        val device = pendingDevice ?: return
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+            device.connectGatt(this, false, gattClientCallback)
+        } else {
+            Toast.makeText(this, "Bluetooth Connect permission required", Toast.LENGTH_SHORT).show()
+        }
     }
 
     fun openFileForDevice(device: BluetoothDevice) {
@@ -211,6 +300,45 @@ class MainActivity : ComponentActivity() {
             gattServer?.close()
         }
     }
+
+    private fun resetSaveFileTimer() {
+        saveTimer?.cancel()
+        saveTimer = Timer().apply {
+            schedule(object : TimerTask() {
+                override fun run() {
+                    if (isReceiving) {
+                        processReceivedData()
+                    }
+                }
+            }, 1000)
+        }
+    }
+
+    private fun processReceivedData() {
+        isReceiving = false
+        val data = receiveBuffer.toByteArray()
+        receiveBuffer.reset()
+        
+        if (data.size > 1) {
+            val nameLen = data[0].toInt() and 0xFF
+            if (data.size > nameLen) {
+                val fileName = String(data, 1, nameLen, Charsets.UTF_8)
+                val fileData = data.copyOfRange(nameLen + 1, data.size)
+                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                val file = File(downloadsDir, fileName)
+                
+                try {
+                    FileOutputStream(file).use { it.write(fileData) }
+                    println("Saved incoming file $fileName to ${file.absolutePath}")
+                    runOnUiThread {
+                        Toast.makeText(this, "File received: $fileName", Toast.LENGTH_LONG).show()
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -257,6 +385,10 @@ fun Greeting(modifier: Modifier = Modifier, onStartDiscovery: () -> Unit) {
             Text("Refresh Discovery")
         }
         Spacer(modifier = Modifier.height(25.dp))
+        selectedFileName?.let { name ->
+            Text("Selected File: $name", fontSize = 16.sp)
+            Spacer(modifier = Modifier.height(10.dp))
+        }
         Text("Discovered Devices:", fontSize = 20.sp)
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxSize().padding(horizontal = 16.dp),

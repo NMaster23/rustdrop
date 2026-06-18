@@ -20,12 +20,14 @@ export component AppWindow inherits Window {
     in-out property <[BlueDevice]> blue_devices: [];
     in-out property <bool> sending_file;
     in-out property <bool> blue_connected_menu;
+    in-out property <bool> receiving_file: false;
 
     callback send_mode(bool);
     callback send_scan(bool);
     callback send_select_device_wifi(string);
     callback send_select_device_blue(string);
     callback disconnect();
+    callback file_accept();
     
     if (mode_select):
         VerticalLayout {    
@@ -61,7 +63,7 @@ export component AppWindow inherits Window {
             }
         }
     }
-    if (blue_scan_menu && !blue_connected_menu): ScrollView {
+    if (blue_scan_menu && !blue_connected_menu && !receiving_file): ScrollView {
         VerticalLayout {
             spacing: 5px;
             for device[i] in blue_devices: Button {
@@ -80,6 +82,12 @@ export component AppWindow inherits Window {
         clicked => {
             blue_connected_menu = false;
             disconnect();
+        }
+    }
+    if (receiving_file): Button {
+        text: "Incoming File Please Press the Button to Accept";
+        clicked => {
+            file_accept();
         }
     }
 }

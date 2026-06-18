@@ -42,11 +42,13 @@ fn send_file_wifi(ip: String, port: u32, file_path: &str) {
     }
 }
 
-fn receive_file_wifi() {
+async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std::sync::Arc<std::sync::Mutex<bool>>) {
     let listener = TcpListener::bind("0.0.0.0:5200").unwrap();
     loop {
         match listener.accept() {
             Ok((mut socket, addr)) => {
+                *file_accepted.lock().unwrap() = false;
+                let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_receiving_file(true));
                 let mut len_buf = [0u8; 1];
                 let _ = socket.read_exact(&mut len_buf);
                 let len = len_buf[0] as usize;
@@ -64,7 +66,13 @@ fn receive_file_wifi() {
                 let mut decoder = Decoder::new(&encoded as &[u8]);
                 let _ = decoder.read_to_string(&mut decoded);
                 match io::copy(&mut socket, &mut file) {
-                    Ok(bytes) => println!("Received {} bytes and saved to {:?}", bytes, save_path),
+                    Ok(bytes) => {
+                        println!("Received {} bytes and saved to {:?}", bytes, save_path);
+                        while !*file_accepted.lock().unwrap() {
+                            async_std::task::sleep(std::time::Duration::from_millis(100)).await;
+                        }
+                        let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_receiving_file(false));
+                    },
                     Err(e) => println!("Error during reception: {}", e),
                 }
             }
@@ -74,7 +82,7 @@ fn receive_file_wifi() {
 }
 
 #[cfg(not(target_os = "android"))]
-pub(crate) async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>) {
+pub(crate) async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>, file_accepted: std::sync::Arc<std::sync::Mutex<bool>>) {
     let service_type = "_rustdrop._tcp.local.";
     let instance_name = "rustdrop";
     let host_name = "rustdrop.local.";
@@ -90,8 +98,9 @@ pub(crate) async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>)
         None,
     ).unwrap();
     mdns.register(rustdrop_service).expect("Failed to register our service");
+    let ui_handle_recv = ui_handle.clone();
     async_std::task::spawn(async move {
-        receive_file_wifi();
+        receive_file_wifi(ui_handle_recv, file_accepted).await;
     });
     let ui_handle_clone = ui_handle.clone();
     async_std::task::spawn(async move {

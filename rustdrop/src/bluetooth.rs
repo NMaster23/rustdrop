@@ -73,7 +73,7 @@ async fn send_file_blue(device: &Device, file_path: &str) {
 }
 
 #[cfg(not(target_os = "android"))]
-pub(crate) async fn receive_file_blue() {
+pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_accepted: Arc<Mutex<bool>>) {
     let (sender_tx, mut receiver_rx) = channel::<PeripheralEvent>(256);
     let mut peripheral = Peripheral::new(sender_tx).await.unwrap();
     while !peripheral.is_powered().await.unwrap() {}
@@ -91,11 +91,17 @@ pub(crate) async fn receive_file_blue() {
     ).await;
     peripheral.start_advertising("RustDrop", &[TARGET_SERVICE]).await;
     let mut received_data = Vec::new();
+    let mut is_receiving = false;
     loop {
         match timeout(Duration::from_secs(1), receiver_rx.recv()).await {
             Ok(Some(event)) => {
                 match event {
                     PeripheralEvent::WriteRequest { request: _, value, offset: _, responder } => {
+                        if !is_receiving {
+                            *file_accepted.lock().unwrap() = false;
+                            let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_receiving_file(true));
+                            is_receiving = true;
+                        }
                         received_data.extend_from_slice(&value);
                         responder.send(WriteRequestResponse { response: RequestResponse::Success });
                     }
@@ -112,13 +118,20 @@ pub(crate) async fn receive_file_blue() {
                         let mut save_path = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
                         save_path.push(&filename);
                         println!("Received file {} with {} bytes. Saving to {:?}", filename, file_data.len(), save_path);
+                        
+                        while !*file_accepted.lock().unwrap() {
+                            async_std::task::sleep(std::time::Duration::from_millis(100)).await;
+                        }
+                        
                         if let Err(e) = async_std::fs::write(&save_path, file_data).await {
                             println!("Error saving file: {}", e);
                         } else {
                             println!("File saved successfully to {:?}", save_path);
                         }
+                        let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_receiving_file(false));
                     }
                 }
+                is_receiving = false;
                 received_data.clear();   
             }
         }
