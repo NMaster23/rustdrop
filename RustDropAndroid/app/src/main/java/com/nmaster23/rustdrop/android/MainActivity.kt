@@ -8,7 +8,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.LocationManager
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.os.ParcelUuid
 import android.widget.Toast
@@ -67,13 +66,12 @@ class MainActivity : ComponentActivity() {
             value: ByteArray?
         ) {
             super.onCharacteristicWriteRequest(device, requestId, characteristic, preparedWrite, responseNeeded, offset, value)
-            if (responseNeeded) {
-                if (ActivityCompat.checkSelfPermission(this@MainActivity, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            if (responseNeeded && value != null) {
+                if (ActivityCompat.checkSelfPermission(this@MainActivity, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
                     gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
                 }
             }
             if (value != null && characteristic?.uuid == targetChar) {
-                // Process the received bytes
                 println("Received ${value.size} bytes from Rust")
             }
         }
@@ -121,6 +119,21 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun checkPermission(permission: String): Boolean {
+        return ActivityCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun sendFile(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, path: Uri) {
+        if (!checkPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+            Toast.makeText(this, "Permissions not enabled", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val inputStream = contentResolver.openInputStream(path)
+        val sendBytes = inputStream?.readBytes() ?: return
+        val writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        gatt.writeCharacteristic(characteristic, sendBytes, writeType)
+    }
+
     private val bluetoothAdapter: BluetoothAdapter? by lazy {
         val bluetoothManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothManager.adapter
@@ -135,7 +148,7 @@ class MainActivity : ComponentActivity() {
 
         if (!adapter.isEnabled) {
             val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
                 enableBtLauncher.launch(enableBtIntent)
             } else {
                 Toast.makeText(this, "Grant Bluetooth Connect permission", Toast.LENGTH_SHORT).show()
@@ -143,7 +156,7 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
             if (gattServer == null) {
                 gattServer = (getSystemService(BLUETOOTH_SERVICE) as BluetoothManager).openGattServer(this, gattServerCallback)
                 val service = BluetoothGattService(targetService, BluetoothGattService.SERVICE_TYPE_PRIMARY)
@@ -174,7 +187,7 @@ class MainActivity : ComponentActivity() {
                 .build()
             bleScanner?.startScan(listOf(filter), settings, scanCallback)
             
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED) {
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED) {
                 val advertiseSettings = AdvertiseSettings.Builder()
                     .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
                     .setConnectable(true)
@@ -190,19 +203,13 @@ class MainActivity : ComponentActivity() {
     }
     @SuppressLint("MissingPermission")
     private fun stopBle() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
-                bleScanner?.stopScan(scanCallback)
-            }
-            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED) {
-                bleAdvertiser?.stopAdvertising(advertiseCallback)
-            }
-            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
-                gattServer?.close()
-            }
-        } else {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
             bleScanner?.stopScan(scanCallback)
+        }
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED) {
             bleAdvertiser?.stopAdvertising(advertiseCallback)
+        }
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
             gattServer?.close()
         }
     }
@@ -223,16 +230,14 @@ fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit, onStartDisco
         }
     }
     LaunchedEffect(Unit) {
-        val permissions = mutableListOf(
+        val permissions = arrayOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.BLUETOOTH_ADVERTISE
         )
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            permissions.add(Manifest.permission.BLUETOOTH_SCAN)
-            permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
-            permissions.add(Manifest.permission.BLUETOOTH_ADVERTISE)
-        }
-        permissionLauncher.launch(permissions.toTypedArray())
+        permissionLauncher.launch(permissions)
     }
     Column(
         modifier = modifier.fillMaxSize(),
@@ -247,16 +252,14 @@ fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit, onStartDisco
         Spacer(modifier = Modifier.height(20.dp))
         Button(
             onClick = {
-                val permissions = mutableListOf(
+                val permissions = arrayOf(
                     Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.ACCESS_COARSE_LOCATION
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                    Manifest.permission.BLUETOOTH_SCAN,
+                    Manifest.permission.BLUETOOTH_CONNECT,
+                    Manifest.permission.BLUETOOTH_ADVERTISE
                 )
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    permissions.add(Manifest.permission.BLUETOOTH_SCAN)
-                    permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
-                    permissions.add(Manifest.permission.BLUETOOTH_ADVERTISE)
-                }
-                permissionLauncher.launch(permissions.toTypedArray())
+                permissionLauncher.launch(permissions)
             },
             modifier = Modifier.size(width = 250.dp, height = 80.dp)
         ) {
@@ -272,11 +275,7 @@ fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit, onStartDisco
                 val deviceName = try { device.name } catch (_: SecurityException) { null }
                 Button(
                     onClick = {
-                        val connectPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                            ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
-                        } else true
-
-                        if (connectPermission) {
+                        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
                             scope.launch(Dispatchers.IO) {
                                 withContext(Dispatchers.Main) {
                                     Toast.makeText(context, "Connecting to ${device.address}...", Toast.LENGTH_SHORT).show()
@@ -287,7 +286,7 @@ fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit, onStartDisco
                                             scope.launch(Dispatchers.Main) {
                                                 Toast.makeText(context, "Connected via GATT!", Toast.LENGTH_SHORT).show()
                                             }
-                                            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                                            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
                                                 gatt.discoverServices()
                                             }
                                         }
@@ -300,6 +299,11 @@ fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit, onStartDisco
                                             if (characteristic != null) {
                                                 scope.launch(Dispatchers.Main) {
                                                     Toast.makeText(context, "Target Service Found!", Toast.LENGTH_SHORT).show()
+                                                    selectedUri?.let { uri ->
+                                                        (context as? MainActivity)?.sendFile(gatt, characteristic, uri)
+                                                    } ?: run {
+                                                        Toast.makeText(context, "Please select a file first", Toast.LENGTH_SHORT).show()
+                                                    }
                                                 }
                                             }
                                         }

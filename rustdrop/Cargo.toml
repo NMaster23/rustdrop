@@ -8,27 +8,16 @@ async-std = "1.13.2"
 bluest = { version = "0.6.9", features = ["unstable"] }
 chunked_transfer = "1.5.0"
 futures-util = "0.3.32"
-local-ip-address = "0.6.12"
+local-ip-address = "0.6.13"
 mdns = "3.0.0"
-mdns-sd = "0.19.1"
-mimalloc = "0.1.50"
+mdns-sd = "0.20.0"
+mimalloc = "0.1.52"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "time", "sync", "macros"] }
-uniffi = { version = "0.31.1", features = [ "cli" ] }
-uniffi_bindgen = "0.31.1"
-
-[target.'cfg(not(target_os = "android"))'.dependencies]
+uniffi = { version = "0.31.2", features = [ "cli" ] }
+uniffi_bindgen = "0.31.2"
 rfd = "0.17.2"
 ble-peripheral-rust = "0.2.0"
 slint = { version = "1.16.1", features = ["backend-android-activity-06"] }
 
-[target.'cfg(not(target_os = "android"))'.build-dependencies]
-slint-build = "1.16.1"
 [build-dependencies]
-uniffi = { version = "0.31.1", features = [ "build" ] }
-
-[lib]
-name = "rustdrop"
-crate-type = ["cdylib", "lib"]
-
-[package.metadata.android]
-target_sdk_version = 36
+slint-build = "1.16.1"

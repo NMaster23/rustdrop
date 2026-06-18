@@ -58,11 +58,13 @@ fn receive_file_wifi() {
                 let mut filename_u8 = &filename_buf as &[u8];
                 let mut filename_decoder = Decoder::new(&mut filename_u8);
                 let _ = filename_decoder.read_to_string(&mut filename);
-                let mut file = File::create(filename).unwrap();
+                let mut save_path = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+                save_path.push(&filename);
+                let mut file = File::create(&save_path).unwrap();
                 let mut decoder = Decoder::new(&encoded as &[u8]);
                 let _ = decoder.read_to_string(&mut decoded);
                 match io::copy(&mut socket, &mut file) {
-                    Ok(bytes) => println!("Received {} bytes and saved to ", bytes),
+                    Ok(bytes) => println!("Received {} bytes and saved to {:?}", bytes, save_path),
                     Err(e) => println!("Error during reception: {}", e),
                 }
             }

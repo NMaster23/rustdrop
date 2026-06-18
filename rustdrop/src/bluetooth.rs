@@ -109,8 +109,10 @@ pub(crate) async fn receive_file_blue() {
                     if received_data.len() > name_len {
                         let filename = String::from_utf8_lossy(&received_data[1..name_len + 1]).to_string();
                         let file_data = &received_data[name_len + 1..];
-                        println!("Received file {} with {} bytes", filename, file_data.len());
-                        let _ = async_std::fs::write(&filename, file_data).await;
+                        let mut save_path = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+                        save_path.push(&filename);
+                        println!("Received file {} with {} bytes. Saving to {:?}", filename, file_data.len(), save_path);
+                        let _ = async_std::fs::write(&save_path, file_data).await;
                     }
                 }
                 received_data.clear();   
