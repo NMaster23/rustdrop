@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.bluetooth.le.*
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.LocationManager
 import android.net.Uri
@@ -112,32 +113,58 @@ class MainActivity : ComponentActivity() {
     fun openFile() {
         openDocumentLauncher.launch(arrayOf("*/*"))
     }
-    private fun startBle() {
-        val bluetoothManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
-        val bluetoothAdapter: BluetoothAdapter? = bluetoothManager.adapter
-        
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            gattServer = bluetoothManager.openGattServer(this, gattServerCallback)
-            val service = BluetoothGattService(targetService, BluetoothGattService.SERVICE_TYPE_PRIMARY)
-            val char = BluetoothGattCharacteristic(
-                targetChar,
-                BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_WRITE,
-                BluetoothGattCharacteristic.PERMISSION_READ or BluetoothGattCharacteristic.PERMISSION_WRITE
-            )
-            service.addCharacteristic(char)
-            gattServer?.addService(service)
+    private val enableBtLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { _ ->
+        if (bluetoothAdapter?.isEnabled == true) {
+            startBle()
         }
-        if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled) {
-            Toast.makeText(this, "Enable Bluetooth", Toast.LENGTH_SHORT).show()
+    }
+
+    private val bluetoothAdapter: BluetoothAdapter? by lazy {
+        val bluetoothManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
+        bluetoothManager.adapter
+    }
+
+    private fun startBle() {
+        val adapter = bluetoothAdapter
+        if (adapter == null) {
+            Toast.makeText(this, "Bluetooth not supported", Toast.LENGTH_SHORT).show()
             return
         }
+
+        if (!adapter.isEnabled) {
+            val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                enableBtLauncher.launch(enableBtIntent)
+            } else {
+                Toast.makeText(this, "Grant Bluetooth Connect permission", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            if (gattServer == null) {
+                gattServer = (getSystemService(BLUETOOTH_SERVICE) as BluetoothManager).openGattServer(this, gattServerCallback)
+                val service = BluetoothGattService(targetService, BluetoothGattService.SERVICE_TYPE_PRIMARY)
+                val char = BluetoothGattCharacteristic(
+                    targetChar,
+                    BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_WRITE,
+                    BluetoothGattCharacteristic.PERMISSION_READ or BluetoothGattCharacteristic.PERMISSION_WRITE
+                )
+                service.addCharacteristic(char)
+                gattServer?.addService(service)
+            }
+        }
+
         val locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
         if (!locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-            Toast.makeText(this, "Please turn on GPS", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Please turn on GPS/Location", Toast.LENGTH_SHORT).show()
             return
         }
-        bleScanner = bluetoothAdapter.bluetoothLeScanner
-        bleAdvertiser = bluetoothAdapter.bluetoothLeAdvertiser
+        
+        bleScanner = adapter.bluetoothLeScanner
+        bleAdvertiser = adapter.bluetoothLeAdvertiser
         
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
             discoveredDevices.clear()
@@ -188,13 +215,25 @@ fun Greeting(modifier: Modifier = Modifier, onOpenFile: () -> Unit, onStartDisco
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        if (permissions.entries.all { it.value }) {
+        val denied = permissions.entries.filter { !it.value }.map { it.key }
+        if (denied.isEmpty()) {
             onStartDiscovery()
         } else {
-            Toast.makeText(context, "Permissions required", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Denied: ${denied.joinToString()}", Toast.LENGTH_LONG).show()
         }
     }
-
+    LaunchedEffect(Unit) {
+        val permissions = mutableListOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            permissions.add(Manifest.permission.BLUETOOTH_SCAN)
+            permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+            permissions.add(Manifest.permission.BLUETOOTH_ADVERTISE)
+        }
+        permissionLauncher.launch(permissions.toTypedArray())
+    }
     Column(
         modifier = modifier.fillMaxSize(),
         verticalArrangement = Arrangement.Center,
