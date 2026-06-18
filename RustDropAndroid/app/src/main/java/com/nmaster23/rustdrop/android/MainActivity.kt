@@ -35,6 +35,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.*
+import android.provider.OpenableColumns
+import androidx.lifecycle.lifecycleScope
 
 private var selectedUri by mutableStateOf<Uri?>(null)
 private val discoveredDevices = mutableStateMapOf<String, BluetoothDevice>()
@@ -124,14 +126,16 @@ class MainActivity : ComponentActivity() {
     }
 
     fun sendFile(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, path: Uri) {
-        if (!checkPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
-            Toast.makeText(this, "Permissions not enabled", Toast.LENGTH_SHORT).show()
-            return
+        val name = contentResolver.query(path, null, null, null, null)?.use { it.moveToFirst(); it.getString(it.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME)) } ?: "file"
+        val bytes = byteArrayOf(name.length.toByte()) + name.toByteArray() + (contentResolver.openInputStream(path)?.use { it.readBytes() } ?: return)
+        lifecycleScope.launch(Dispatchers.IO) {
+            bytes.toList().chunked(20).forEach { chunk ->
+                if (checkPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+                    gatt.writeCharacteristic(characteristic, chunk.toByteArray(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+                    Thread.sleep(20)
+                }
+            }
         }
-        val inputStream = contentResolver.openInputStream(path)
-        val sendBytes = inputStream?.readBytes() ?: return
-        val writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        gatt.writeCharacteristic(characteristic, sendBytes, writeType)
     }
 
     private val bluetoothAdapter: BluetoothAdapter? by lazy {

@@ -35,8 +35,3 @@ async fn main() -> Result<(), Error> {
     ui.run().expect("UI Initialization Error");
     Ok(())
 }
-
-#[cfg(target_os = "android")]
-fn main() {
-    println!("Running on Android");
-}
