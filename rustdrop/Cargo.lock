@@ -4924,13 +4924,11 @@ dependencies = [
 name = "rustdrop"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-std",
  "ble-peripheral-rust",
  "bluest",
  "chunked_transfer",
  "dirs",
- "futures",
  "futures-util",
  "local-ip-address",
  "mdns",

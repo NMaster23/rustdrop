@@ -16,6 +16,7 @@ use std::time::Duration;
 use ble_peripheral_rust::{
     gatt::{
         characteristic::Characteristic,
+        properties::CharacteristicProperty,
         peripheral_event::{
             PeripheralEvent, RequestResponse, WriteRequestResponse,
         },
@@ -57,8 +58,9 @@ async fn send_file_blue(device: &Device, file_path: &str) {
     let file_name_str = std::path::Path::new(file_path).file_name().and_then(|name| name.to_str()).unwrap_or("unknown_file");
     let file_name = file_name_str.as_bytes();
     let file_bytes = std::fs::read(file_path).expect("Failed to read file");
+    let file_size = file_bytes.len() as u64; 
     let mut to_send = Vec::new();
-    to_send.extend_from_slice(&file_size); 
+    to_send.extend_from_slice(&file_size.to_le_bytes());
     to_send.push(file_name.len() as u8);
     to_send.extend_from_slice(file_name);
     to_send.extend_from_slice(&file_bytes);
@@ -86,6 +88,7 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
             characteristics: vec![
                 Characteristic {
                     uuid: TARGET_CHAR,
+                    properties: vec![CharacteristicProperty::Write, CharacteristicProperty::WriteWithoutResponse],
                     ..Default::default()
                 }
             ],
@@ -104,39 +107,50 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                             let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_receiving_file(true));
                             is_receiving = true;
                         }
+                        
                         received_data.extend_from_slice(&value);
+                        if received_data.len() >= 9 {
+                            let mut size_bytes = [0u8; 8];
+                            size_bytes.copy_from_slice(&received_data[0..8]); // Extract the 8 bytes
+                            let expected_file_size = u64::from_le_bytes(size_bytes) as usize;
+                            let name_len = received_data[8] as usize;
+                            let header_size = 9 + name_len;
+                            let total_expected_size = header_size + expected_file_size;
+                            if received_data.len() >= total_expected_size {
+                                let mut filename = String::from_utf8_lossy(&received_data[9..9 + name_len]).to_string();
+                                filename = filename.chars().filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_').collect();
+                                if filename.is_empty() { filename = "RustDrop_Received_File".to_string(); }
+                                
+                                let file_data = &received_data[header_size..];
+                                let mut save_path = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+                                save_path.push(&filename);
+                                
+                                println!("Received file {} with {} bytes. Saving to {:?}", filename, file_data.len(), save_path);
+                                let mut waiting = 0;
+                                while !*file_accepted.lock().unwrap() && waiting < 300 {
+                                    async_std::task::sleep(std::time::Duration::from_millis(100)).await;
+                                    waiting += 1;
+                                }
+                                
+                                if let Err(e) = async_std::fs::write(&save_path, file_data).await {
+                                    println!("Error saving file: {}", e);
+                                } else {
+                                    println!("File saved successfully to {:?}", save_path);
+                                }
+                                let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_receiving_file(false));
+                                is_receiving = false;
+                                received_data.clear();
+                            }
+                        }
+                        
                         responder.send(WriteRequestResponse { response: RequestResponse::Success });
                     }
                     _ => {}
                 }
             },
             None => break,
-            Err(_) => {
-                if received_data.len() > 1 {
-                    let name_len = received_data[0] as usize;
-                    if received_data.len() > name_len {
-                        let mut filename = String::from_utf8_lossy(&received_data[1..name_len + 1]).to_string();
-                        filename = filename.chars().filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_').collect();
-                        if filename.is_empty() {
-                            filename = "RustDrop_Received_File".to_string();
-                        }
-                        let file_data = &received_data[name_len + 1..];
-                        let mut save_path = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-                        save_path.push(&filename);
-                        println!("Received file {} with {} bytes. Saving to {:?}", filename, file_data.len(), save_path);
-                        
-                        while !*file_accepted.lock().unwrap() {
-                            async_std::task::sleep(std::time::Duration::from_millis(100)).await;
-                        }
-                        
-                        if let Err(e) = async_std::fs::write(&save_path, file_data).await {
-                            println!("Error saving file: {}", e);
-                        } else {
-                            println!("File saved successfully to {:?}", save_path);
-                        }
-                        let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_receiving_file(false));
-                    }
-                }
+            _ => {
+                println!("Connection dropped or channel closed.");
                 is_receiving = false;
                 received_data.clear();   
             }
