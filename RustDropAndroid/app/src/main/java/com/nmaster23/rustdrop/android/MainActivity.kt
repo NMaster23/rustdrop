@@ -27,6 +27,7 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.MediaScannerConnection
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
@@ -50,29 +51,131 @@ val targetService: java.util.UUID = java.util.UUID.fromString("12345678-1234-567
 val targetChar: java.util.UUID = java.util.UUID.fromString("12345678-1234-5678-1234-56789abcdef1")
 const val REQUEST_ENABLE_BT = 1
 
+fun android.content.Context.hasBluetoothConnectPermission(): Boolean {
+    return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+        androidx.core.content.ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+    } else {
+        true
+    }
+}
+
+fun android.content.Context.hasBluetoothScanPermission(): Boolean {
+    return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+        androidx.core.content.ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
+    } else {
+        androidx.core.content.ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    }
+}
+
+fun android.content.Context.hasBluetoothAdvertisePermission(): Boolean {
+    return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+        androidx.core.content.ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED
+    } else {
+        true
+    }
+}
+
 class MainActivity : ComponentActivity() {
     var isScanning = false
+
+    var gattServer: android.bluetooth.BluetoothGattServer? = null
+    var gattServerCallbackRef: android.bluetooth.BluetoothGattServerCallback? = null
+    var selectedDeviceForSending: BluetoothDevice? = null
+    var fileDataToSend: ByteArray? = null
+    var fileDataSendOffset = 0
+    var targetCharacteristic: BluetoothGattCharacteristic? = null
+    var currentOutputFile: File? = null
+
+    val filePickerLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null && selectedDeviceForSending != null) {
+            val inputStream = contentResolver.openInputStream(uri)
+            val fileBytes = inputStream?.readBytes() ?: return@registerForActivityResult
+            val fileName = getFileName(uri) ?: "UnknownFile"
+            val fileNameBytes = fileName.toByteArray(Charsets.UTF_8)
+            val nameLen = fileNameBytes.size
+
+            val headerBuffer = ByteBuffer.allocate(8 + 1 + nameLen)
+            headerBuffer.order(ByteOrder.LITTLE_ENDIAN)
+            headerBuffer.putLong(fileBytes.size.toLong())
+            headerBuffer.put(nameLen.toByte())
+            headerBuffer.put(fileNameBytes)
+
+            val fullData = headerBuffer.array() + fileBytes
+            fileDataToSend = fullData
+            fileDataSendOffset = 0
+
+            gattHandling(selectedDeviceForSending!!)
+        }
+    }
+
+    private fun getFileName(uri: android.net.Uri): String? {
+        var result: String? = null
+        if (uri.scheme == "content") {
+            val cursor = contentResolver.query(uri, null, null, null, null)
+            try {
+                if (cursor != null && cursor.moveToFirst()) {
+                    val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (index >= 0) {
+                        result = cursor.getString(index)
+                    }
+                }
+            } finally {
+                cursor?.close()
+            }
+        }
+        if (result == null) {
+            result = uri.path
+            val cut = result?.lastIndexOf('/')
+            if (cut != null && cut != -1) {
+                result = result.substring(cut + 1)
+            }
+        }
+        return result
+    }
+
     val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         permissions.entries.forEach {
             Log.d("Permissions", "${it.key} = ${it.value}")
         }
+        val connectGranted = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            permissions[Manifest.permission.BLUETOOTH_CONNECT] == true
+        } else true
+        val advertiseGranted = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            permissions[Manifest.permission.BLUETOOTH_ADVERTISE] == true
+        } else true
+        if (connectGranted && advertiseGranted) {
+            gattServerHandling()
+        }
     }
     val discoveredDevices = mutableStateListOf<BluetoothDevice>()
+    val enableBluetoothLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            scanBleDevices()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         permissionHandling()
-        gattServerHandling()
+        if (hasBluetoothConnectPermission()) {
+            gattServerHandling()
+        }
         setContent {
             RustdropAndroidTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     UserInterface(
                         modifier = Modifier.padding(innerPadding),
                         devices = discoveredDevices,
-                        onRefresh = { scanBleDevices() }
+                        onRefresh = { scanBleDevices() },
+                        onDeviceClick = { device ->
+                            selectedDeviceForSending = device
+                            filePickerLauncher.launch("*/*")
+                        }
                     )
                 }
             }
@@ -81,7 +184,12 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun UserInterface(modifier: Modifier = Modifier, devices: List<BluetoothDevice>, onRefresh: () -> Unit = {}) {
+fun UserInterface(
+    modifier: Modifier = Modifier,
+    devices: List<BluetoothDevice>,
+    onRefresh: () -> Unit = {},
+    onDeviceClick: (BluetoothDevice) -> Unit = {}
+) {
     Column(modifier = modifier.padding(16.dp)) {
         Button(
             onClick = onRefresh
@@ -90,18 +198,14 @@ fun UserInterface(modifier: Modifier = Modifier, devices: List<BluetoothDevice>,
         }
         devices.forEach { device ->
             // Try to get name, fallback to address
-            val name = if (ActivityCompat.checkSelfPermission(
-                    androidx.compose.ui.platform.LocalContext.current,
-                    Manifest.permission.BLUETOOTH_CONNECT
-                ) == PackageManager.PERMISSION_GRANTED
-            ) {
+            val name = if (androidx.compose.ui.platform.LocalContext.current.hasBluetoothConnectPermission()) {
                 device.name ?: device.address
             } else {
                 device.address
             }
-            
+
             Button(
-                onClick = { /* Handle connection or selection */ },
+                onClick = { onDeviceClick(device) },
                 modifier = Modifier.padding(top = 8.dp)
             ) {
                 Text(text = name)
@@ -133,7 +237,7 @@ fun MainActivity.bleAdvertising() {
         .setConnectable(true)
         .build()
 
-    val data = android.bluetooth.le.AdvertiseData.Builder()
+    val data = AdvertiseData.Builder()
         .setIncludeDeviceName(false)
         .addServiceUuid(android.os.ParcelUuid(targetService))
         .build()
@@ -152,47 +256,43 @@ fun MainActivity.bleAdvertising() {
         }
     }
 
-    if (ActivityCompat.checkSelfPermission(
-            this,
-            Manifest.permission.BLUETOOTH_ADVERTISE
-        ) == PackageManager.PERMISSION_GRANTED
-    ) {
+    if (hasBluetoothAdvertisePermission()) {
         advertiser?.startAdvertising(settings, data, scanResponse, callback)
     }
 
 }
 
 fun MainActivity.scanBleDevices() {
-    if (ActivityCompat.checkSelfPermission(
-            this,
-            Manifest.permission.BLUETOOTH_SCAN
-        ) != PackageManager.PERMISSION_GRANTED
-    ) {
+    if (!hasBluetoothScanPermission()) {
         permissionHandling()
         return
     }
     val locationManager = getSystemService(android.content.Context.LOCATION_SERVICE) as android.location.LocationManager
     val isLocationEnabled = locationManager.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) ||
             locationManager.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER)
-    
+
     if (!isLocationEnabled) {
         Toast.makeText(this, "Please enable Location Services", Toast.LENGTH_LONG).show()
     }
 
     val bluetoothManager = getSystemService(BluetoothManager::class.java)
     val bluetoothAdapter = bluetoothManager?.adapter ?: return
-    val bluetoothLeScanner = bluetoothAdapter.bluetoothLeScanner
-    if (bluetoothLeScanner == null) {
-        Toast.makeText(this, "Please enable Bluetooth", Toast.LENGTH_SHORT).show()
+
+    if (!bluetoothAdapter.isEnabled) {
+        val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+        enableBluetoothLauncher.launch(enableBtIntent)
         return
     }
 
+    val bluetoothLeScanner = bluetoothAdapter.bluetoothLeScanner
+    if (bluetoothLeScanner == null) {
+        Toast.makeText(this, "BLE Scanner not available", Toast.LENGTH_SHORT).show()
+        return
+    }
     val handler = Handler(Looper.getMainLooper())
     val SCAN_PERIOD: Long = 10000
-    if (!bluetoothAdapter.isEnabled) {
-        val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-        startActivityForResult(enableBtIntent, REQUEST_ENABLE_BT)
-        return
+    if (gattServer == null) {
+        gattServerHandling()
     }
     val filters = mutableListOf<ScanFilter>()
     val filter = ScanFilter.Builder()
@@ -207,7 +307,7 @@ fun MainActivity.scanBleDevices() {
     val leScanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device
-            val deviceName = if (ActivityCompat.checkSelfPermission(this@scanBleDevices, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+            val deviceName = if (hasBluetoothConnectPermission()) {
                 device.name ?: "Unknown"
             } else {
                 "Unknown (No Permission)"
@@ -230,7 +330,7 @@ fun MainActivity.scanBleDevices() {
         discoveredDevices.clear()
         handler.postDelayed({
             isScanning = false
-            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
+            if (hasBluetoothScanPermission()) {
                 bluetoothLeScanner.stopScan(leScanCallback)
             }
             Log.i("ScanBleDevices", "Stopping BLE scan after period...")
@@ -244,6 +344,13 @@ fun MainActivity.scanBleDevices() {
 }
 
 fun MainActivity.gattServerHandling() {
+    if (!hasBluetoothConnectPermission()) {
+        return
+    }
+    if (gattServer != null) {
+        Log.i("GattServer", "GATT server already running, skipping re-creation.")
+        return
+    }
     var isReceivingFile = false
     var fileSize: Long = 0
     var bytesReceived: Long = 0
@@ -251,11 +358,27 @@ fun MainActivity.gattServerHandling() {
     val headerBuffer = ByteArrayOutputStream()
     var fileOutputStream: FileOutputStream? = null
     val bluetoothManager = getSystemService(BluetoothManager::class.java)
-    val bluetoothAdapter = bluetoothManager?.adapter ?: return
-    var gattServer: android.bluetooth.BluetoothGattServer? = null
     val gattServerCallback = object : android.bluetooth.BluetoothGattServerCallback() {
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
-            Log.d("GattServer", "Connection state changed: $newState")
+            val deviceName = if (hasBluetoothConnectPermission()) {
+                device.name ?: device.address
+            } else {
+                device.address
+            }
+            when (newState) {
+                BluetoothProfile.STATE_CONNECTED -> Log.i("GattServer", "Device connected: $deviceName (status=$status)")
+                BluetoothProfile.STATE_DISCONNECTED -> Log.i("GattServer", "Device disconnected: $deviceName (status=$status)")
+                else -> Log.d("GattServer", "Connection state changed to $newState for $deviceName (status=$status)")
+            }
+        }
+
+        override fun onServiceAdded(status: Int, service: BluetoothGattService) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.i("GattServer", "Service registered. Starting advertising.")
+                bleAdvertising()
+            } else {
+                Log.e("GattServer", "Failed to add service: $status")
+            }
         }
 
         override fun onCharacteristicWriteRequest(
@@ -287,35 +410,52 @@ fun MainActivity.gattServerHandling() {
                         val headerSize = 9 + nameLen
                         if (buffer.size >= headerSize) {
                             incomingFileName = String(buffer.copyOfRange(9, headerSize))
+                                .replace(Regex("[^a-zA-Z0-9.\\-_]"), "")
                             if (incomingFileName.isEmpty()) {
                                 incomingFileName = "RustDrop_File_Error"
                             }
                             val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                            if (!downloadDir.exists()) downloadDir.mkdirs()
                             val outputFile = File(downloadDir, incomingFileName)
+                            currentOutputFile = outputFile
                             fileOutputStream = FileOutputStream(outputFile)
                             val remainingData = buffer.copyOfRange(headerSize, buffer.size)
                             if (remainingData.isNotEmpty()) {
-                                fileOutputStream?.write(remainingData)
+                                fileOutputStream.write(remainingData)
                                 bytesReceived += remainingData.size
                             }
-                            isReceivingFile = true
                             headerBuffer.reset()
+                            isReceivingFile = true
                             Log.i("GattServer", "Started receiving file: $incomingFileName ($fileSize bytes)")
+                            if (bytesReceived >= fileSize) {
+                                fileOutputStream.flush()
+                                fileOutputStream.close()
+                                isReceivingFile = false
+                                bytesReceived = 0
+                                outputFile.let { file ->
+                                    MediaScannerConnection.scanFile(this@gattServerHandling, arrayOf(file.absolutePath), null, null)
+                                    Log.i("GattServer", "File saved and scanned: ${file.absolutePath}")
+                                }
+                            }
                         }
                     }
                 } else {
                     fileOutputStream?.write(value)
                     bytesReceived += value.size
                     if (bytesReceived >= fileSize) {
+                        fileOutputStream?.flush()
                         fileOutputStream?.close()
-                        fileOutputStream = null
                         isReceivingFile = false
                         bytesReceived = 0
                         headerBuffer.reset()
+                        currentOutputFile?.let { file ->
+                            MediaScannerConnection.scanFile(this@gattServerHandling, arrayOf(file.absolutePath), null, null)
+                            Log.i("GattServer", "File saved and scanned: ${file.absolutePath}")
+                        }
                     }
                 }
                 if (responseNeeded) {
-                    if (ActivityCompat.checkSelfPermission(this@gattServerHandling, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED) {
+                    if (hasBluetoothConnectPermission()) {
                         gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
                     }
                 }
@@ -323,10 +463,10 @@ fun MainActivity.gattServerHandling() {
         }
     }
 
-    if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+    if (!hasBluetoothConnectPermission()) {
         return
     }
-    bleAdvertising()
+    gattServerCallbackRef = gattServerCallback
     gattServer = bluetoothManager.openGattServer(this, gattServerCallback)
     val service = BluetoothGattService(targetService, BluetoothGattService.SERVICE_TYPE_PRIMARY)
     val characteristic = BluetoothGattCharacteristic(targetChar, BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_READ, BluetoothGattCharacteristic.PERMISSION_WRITE or BluetoothGattCharacteristic.PERMISSION_READ)
@@ -336,39 +476,58 @@ fun MainActivity.gattServerHandling() {
 }
 
 fun MainActivity.gattHandling(device: BluetoothDevice) {
-    if (ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.BLUETOOTH_CONNECT
-        ) != PackageManager.PERMISSION_GRANTED
-    ) {
+    if (!hasBluetoothConnectPermission()) {
         Toast.makeText(this, "Bluetooth permission required", Toast.LENGTH_SHORT).show()
+        val perm = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            Manifest.permission.BLUETOOTH_CONNECT
+        } else {
+            Manifest.permission.ACCESS_FINE_LOCATION
+        }
         ActivityCompat.requestPermissions(
             this,
-            arrayOf(Manifest.permission.BLUETOOTH_CONNECT),
+            arrayOf(perm),
             1
         )
         return
     }
+
+    fun sendNextChunk(gatt: BluetoothGatt) {
+        val data = fileDataToSend ?: return
+        val char = targetCharacteristic ?: return
+        if (fileDataSendOffset >= data.size) {
+            Log.i("GattHandling", "Finished sending file")
+            Handler(Looper.getMainLooper()).post {
+                Toast.makeText(this@gattHandling, "File Sent!", Toast.LENGTH_SHORT).show()
+            }
+            gatt.close()
+            fileDataToSend = null
+            return
+        }
+        val chunkSize = Math.min(20, data.size - fileDataSendOffset)
+        val chunk = data.copyOfRange(fileDataSendOffset, fileDataSendOffset + chunkSize)
+        char.value = chunk
+        char.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        val success = gatt.writeCharacteristic(char)
+        if (!success) {
+            Log.e("GattHandling", "Failed to write characteristic")
+            Handler(Looper.getMainLooper()).post {
+                Toast.makeText(this@gattHandling, "Failed to send chunk", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 Log.e("GattHandling", "GATT error: $status")
-                if (ActivityCompat.checkSelfPermission(
-                        this@gattHandling,
-                        Manifest.permission.BLUETOOTH_CONNECT
-                    ) == PackageManager.PERMISSION_GRANTED
-                ) {
+                if (hasBluetoothConnectPermission()) {
                     gatt.close()
                 }
                 return
             }
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 Log.i("GattHandling", "Connected to GATT server.")
-                if (ActivityCompat.checkSelfPermission(
-                        this@gattHandling,
-                        Manifest.permission.BLUETOOTH_CONNECT
-                    ) == PackageManager.PERMISSION_GRANTED
-                ) {
+                if (hasBluetoothConnectPermission()) {
                     gatt.discoverServices()
                 }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
@@ -384,6 +543,29 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 Log.i("GattHandling", "Services discovered.")
+                val service = gatt.getService(targetService)
+                targetCharacteristic = service?.getCharacteristic(targetChar)
+                if (targetCharacteristic != null && fileDataToSend != null) {
+                    sendNextChunk(gatt)
+                } else {
+                    Log.e("GattHandling", "Target characteristic not found or no file data.")
+                    gatt.close()
+                }
+            }
+        }
+
+        @RequiresPermission(value = Manifest.permission.BLUETOOTH_CONNECT)
+        override fun onCharacteristicWrite(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            status: Int
+        ) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                fileDataSendOffset += characteristic.value?.size ?: 20
+                sendNextChunk(gatt)
+            } else {
+                Log.e("GattHandling", "Characteristic write failed: $status")
+                gatt.close()
             }
         }
 
@@ -398,11 +580,7 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
             }
         }
     }
-    if (ActivityCompat.checkSelfPermission(
-            this,
-            Manifest.permission.BLUETOOTH_CONNECT
-        ) == PackageManager.PERMISSION_GRANTED
-    ) {
+    if (hasBluetoothConnectPermission()) {
         device.connectGatt(this, false, gattCallback)
     }
 }

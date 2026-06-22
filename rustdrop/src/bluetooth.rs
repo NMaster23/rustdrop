@@ -41,19 +41,70 @@ const TARGET_SERVICE: Uuid = Uuid::from_u128(0x12345678_1234_5678_1234_56789abcd
 use slint::{SharedString, Model};
 
 #[cfg(not(target_os = "android"))]
-async fn send_file_blue(device: &Device, file_path: &str) {
+async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str) -> bool {
     let mut service_char = None;
-    let services = device.discover_services().await.unwrap();
-    for service in services {
-        let characteristics = service.discover_characteristics().await.unwrap();
-        println!("Service: {:?}", service);
-        for characteristic in characteristics {
-            println!("Characteristics: {:?}", characteristic);
-            if service.uuid() == TARGET_SERVICE && characteristic.uuid() == TARGET_CHAR {
-                service_char = Some(characteristic);
-                break;
+    async_std::task::sleep(Duration::from_secs(3)).await;
+    for attempt in 1..=5 {
+        println!("Service discovery attempt {}/5...", attempt);
+        let services = match timeout(Duration::from_secs(20), device.discover_services()).await {
+            Ok(Ok(s)) if !s.is_empty() => {
+                println!("Found {} services", s.len());
+                for service in &s {
+                    println!("Discovered service UUID: {}", service.uuid());
+                }
+                s
+            }
+            Ok(Ok(_)) => {
+                println!("No services found (empty cache). Retrying...");
+                let _ = adapter.disconnect_device(device).await;
+                async_std::task::sleep(Duration::from_secs(2)).await;
+                let _ = adapter.connect_device(device).await;
+                async_std::task::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+            Ok(Err(e)) => {
+                println!("Service discovery error: {}. Retrying...", e);
+                let _ = adapter.disconnect_device(device).await;
+                async_std::task::sleep(Duration::from_secs(2)).await;
+                let _ = adapter.connect_device(device).await;
+                async_std::task::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+            Err(_) => {
+                println!("Service discovery timed out. Retrying...");
+                if attempt >= 3 {
+                    let _ = adapter.disconnect_device(device).await;
+                    async_std::task::sleep(Duration::from_secs(2)).await;
+                    let _ = adapter.connect_device(device).await;
+                    async_std::task::sleep(Duration::from_secs(2)).await;
+                }
+                continue;
+            }
+        };
+        for service in services {
+            if service.uuid() == TARGET_SERVICE {
+                println!("Found TARGET_SERVICE!");
+                let characteristics = match service.discover_characteristics().await {
+                    Ok(c) => c,
+                    Err(e) => { println!("Characteristic discovery failed: {}", e); continue; }
+                };
+                for characteristic in characteristics {
+                    if characteristic.uuid() == TARGET_CHAR {
+                        println!("Found TARGET_CHAR!");
+                        service_char = Some(characteristic);
+                        break;
+                    }
+                }
             }
         }
+        if service_char.is_some() {
+            break;
+        }
+        println!("TARGET_CHAR not found in services. Retrying...");
+        let _ = adapter.disconnect_device(device).await;
+        async_std::task::sleep(Duration::from_secs(2)).await;
+        let _ = adapter.connect_device(device).await;
+        async_std::task::sleep(Duration::from_secs(2)).await;
     }
     let file_name_str = std::path::Path::new(file_path).file_name().and_then(|name| name.to_str()).unwrap_or("unknown_file");
     let file_name = file_name_str.as_bytes();
@@ -68,11 +119,15 @@ async fn send_file_blue(device: &Device, file_path: &str) {
         for chunk in to_send.chunks(20) {
             if let Err(e) = write_char.write(chunk).await {
                 println!("Error Sending Chunk: {}", e);
-                break;
+                return false;
             }
             async_std::task::sleep(Duration::from_millis(10)).await;
         }
         println!("file sent");
+        true
+    } else {
+        println!("TARGET_CHAR not found on device");
+        false
     }
 }
 
@@ -102,6 +157,8 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
             Some(event) => {
                 match event {
                     PeripheralEvent::WriteRequest { request: _, value, offset: _, responder } => {
+                        let _ = responder.send(WriteRequestResponse { response: RequestResponse::Success });
+
                         if !is_receiving {
                             *file_accepted.lock().unwrap() = false;
                             let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_receiving_file(true));
@@ -121,7 +178,8 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                                 filename = filename.chars().filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_').collect();
                                 if filename.is_empty() { filename = "RustDrop_Received_File".to_string(); }
                                 
-                                let file_data = &received_data[header_size..];
+                                let end_idx = std::cmp::min(header_size + expected_file_size, received_data.len());
+                                let file_data = &received_data[header_size..end_idx];
                                 let mut save_path = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
                                 save_path.push(&filename);
                                 
@@ -142,17 +200,15 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                                 received_data.clear();
                             }
                         }
-                        
-                        responder.send(WriteRequestResponse { response: RequestResponse::Success });
                     }
                     _ => {}
                 }
             },
-            None => break,
-            _ => {
-                println!("Connection dropped or channel closed.");
+            None => {
+                println!("Channel closed.");
                 is_receiving = false;
-                received_data.clear();   
+                received_data.clear();
+                break;
             }
         }
     }
@@ -169,7 +225,7 @@ pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
         return;
     }
     println!("starting scan");
-    let mut scan = adapter.scan(&[]).await.unwrap();
+    let mut scan = adapter.scan(&[TARGET_SERVICE]).await.unwrap();
     println!("scan started");
     let is_scanning = Arc::new(Mutex::new(true));
     let is_scanning_stop = Arc::clone(&is_scanning);
@@ -188,19 +244,31 @@ pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
             let active_session_clone = Arc::clone(&active_session);
             *is_scanning_stop.lock().unwrap() = false;
             async_std::task::spawn(async move {
-                let id_str = identifier.to_string();
-                let device = identifier_name.lock().unwrap().get(&id_str).cloned().unwrap();
-                let device_file = device.clone();
-                adapter_connect.connect_device(&device_file).await.unwrap();
-                println!("Connected to {}", identifier.to_string());
-                *active_session_clone.lock().unwrap() = Some(device);
                 let file = FileDialog::new()
                     .set_directory("/")
                     .pick_file();
+                let id_str = identifier.to_string();
+                let device = identifier_name.lock().unwrap().get(&id_str).cloned().unwrap();
+                let device_file = device.clone();
                 if let Some(path) = file {
                     let path_str = path.to_string_lossy().into_owned();
                     println!("{}", path_str);
-                    send_file_blue(&device_file, &path_str).await;
+                    match timeout(Duration::from_secs(10), adapter_connect.connect_device(&device_file)).await {
+                        Ok(Ok(_)) => {
+                            println!("Connected to {}", identifier.to_string());
+                            *active_session_clone.lock().unwrap() = Some(device);
+                            async_std::task::sleep(Duration::from_secs(1)).await;
+                            println!("About to send file");
+                            let success = send_file_blue(&adapter_connect, &device_file, &path_str).await;
+                            if success {
+                                println!("Sent file successfully");
+                            } else {
+                                println!("Failed to send file");
+                            }
+                        }
+                        Ok(Err(e)) => { println!("Connect error: {}", e); }
+                        Err(_) => { println!("Connect timed out"); }
+                    }
                 }
             });
         });
