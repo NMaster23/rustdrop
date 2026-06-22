@@ -20,6 +20,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import com.nmaster23.rustdrop.android.ui.theme.RustdropAndroidTheme
 import android.bluetooth.BluetoothProfile
+import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseData
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
@@ -31,6 +32,7 @@ import android.media.MediaScannerConnection
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelUuid
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -47,8 +49,8 @@ import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-val targetService: java.util.UUID = java.util.UUID.fromString("12345678-1234-5678-1234-56789abcdef0")
-val targetChar: java.util.UUID = java.util.UUID.fromString("12345678-1234-5678-1234-56789abcdef1")
+val targetService: java.util.UUID = java.util.UUID.fromString("00001825-0000-1000-8000-00805f9b34fb")
+val targetChar: java.util.UUID = java.util.UUID.fromString("00002ac5-0000-1000-8000-00805f9b34fb")
 const val REQUEST_ENABLE_BT = 1
 
 fun android.content.Context.hasBluetoothConnectPermission(): Boolean {
@@ -85,7 +87,8 @@ class MainActivity : ComponentActivity() {
     var fileDataSendOffset = 0
     var targetCharacteristic: BluetoothGattCharacteristic? = null
     var currentOutputFile: File? = null
-
+    var lastChunkSize = 0
+    var negotiatedMtu = 23
     val filePickerLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null && selectedDeviceForSending != null) {
             val inputStream = contentResolver.openInputStream(uri)
@@ -157,7 +160,11 @@ class MainActivity : ComponentActivity() {
             scanBleDevices()
         }
     }
-
+    override fun onDestroy() {
+        super.onDestroy()
+        gattServer?.close()
+        gattServer = null
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -174,6 +181,7 @@ class MainActivity : ComponentActivity() {
                         onRefresh = { scanBleDevices() },
                         onDeviceClick = { device ->
                             selectedDeviceForSending = device
+                            android.widget.Toast.makeText(this@MainActivity, "Select a file to send...", android.widget.Toast.LENGTH_SHORT).show()
                             filePickerLauncher.launch("*/*")
                         }
                     )
@@ -197,7 +205,6 @@ fun UserInterface(
             Text("Refresh Discovery")
         }
         devices.forEach { device ->
-            // Try to get name, fallback to address
             val name = if (androidx.compose.ui.platform.LocalContext.current.hasBluetoothConnectPermission()) {
                 device.name ?: device.address
             } else {
@@ -239,7 +246,7 @@ fun MainActivity.bleAdvertising() {
 
     val data = AdvertiseData.Builder()
         .setIncludeDeviceName(false)
-        .addServiceUuid(android.os.ParcelUuid(targetService))
+        .addServiceUuid(ParcelUuid(targetService))
         .build()
 
     val scanResponse = AdvertiseData.Builder()
@@ -259,7 +266,6 @@ fun MainActivity.bleAdvertising() {
     if (hasBluetoothAdvertisePermission()) {
         advertiser?.startAdvertising(settings, data, scanResponse, callback)
     }
-
 }
 
 fun MainActivity.scanBleDevices() {
@@ -366,12 +372,30 @@ fun MainActivity.gattServerHandling() {
                 device.address
             }
             when (newState) {
-                BluetoothProfile.STATE_CONNECTED -> Log.i("GattServer", "Device connected: $deviceName (status=$status)")
-                BluetoothProfile.STATE_DISCONNECTED -> Log.i("GattServer", "Device disconnected: $deviceName (status=$status)")
-                else -> Log.d("GattServer", "Connection state changed to $newState for $deviceName (status=$status)")
+                BluetoothProfile.STATE_CONNECTED -> {
+                    Log.i("GattServer", "Device connected: $deviceName")
+                    Handler(Looper.getMainLooper()).post {
+                        Toast.makeText(
+                            this@gattServerHandling,
+                            "Desktop Connected to Phone!",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    if (hasBluetoothConnectPermission()) {
+                        gattServer?.connect(device, true)
+                    }
+                }
+                BluetoothProfile.STATE_DISCONNECTED -> {
+                    Log.i("GattServer", "Device disconnected: $deviceName")
+                    // Reset transfer state on disconnect
+                    isReceivingFile = false
+                    bytesReceived = 0
+                    headerBuffer.reset()
+                    fileOutputStream?.close()
+                    fileOutputStream = null
+                }
             }
         }
-
         override fun onServiceAdded(status: Int, service: BluetoothGattService) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 Log.i("GattServer", "Service registered. Starting advertising.")
@@ -414,22 +438,25 @@ fun MainActivity.gattServerHandling() {
                             if (incomingFileName.isEmpty()) {
                                 incomingFileName = "RustDrop_File_Error"
                             }
-                            val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                            if (!downloadDir.exists()) downloadDir.mkdirs()
+                            val downloadDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: cacheDir
+                            if (downloadDir != null && !downloadDir.exists()) downloadDir.mkdirs()
                             val outputFile = File(downloadDir, incomingFileName)
                             currentOutputFile = outputFile
                             fileOutputStream = FileOutputStream(outputFile)
                             val remainingData = buffer.copyOfRange(headerSize, buffer.size)
                             if (remainingData.isNotEmpty()) {
-                                fileOutputStream.write(remainingData)
+                                fileOutputStream!!.write(remainingData)
                                 bytesReceived += remainingData.size
                             }
                             headerBuffer.reset()
                             isReceivingFile = true
                             Log.i("GattServer", "Started receiving file: $incomingFileName ($fileSize bytes)")
+                            Handler(Looper.getMainLooper()).post {
+                                Toast.makeText(this@gattServerHandling, "Receiving: $incomingFileName", Toast.LENGTH_SHORT).show()
+                            }
                             if (bytesReceived >= fileSize) {
-                                fileOutputStream.flush()
-                                fileOutputStream.close()
+                                fileOutputStream!!.flush()
+                                fileOutputStream!!.close()
                                 isReceivingFile = false
                                 bytesReceived = 0
                                 outputFile.let { file ->
@@ -469,7 +496,11 @@ fun MainActivity.gattServerHandling() {
     gattServerCallbackRef = gattServerCallback
     gattServer = bluetoothManager.openGattServer(this, gattServerCallback)
     val service = BluetoothGattService(targetService, BluetoothGattService.SERVICE_TYPE_PRIMARY)
-    val characteristic = BluetoothGattCharacteristic(targetChar, BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_READ, BluetoothGattCharacteristic.PERMISSION_WRITE or BluetoothGattCharacteristic.PERMISSION_READ)
+    val characteristic = BluetoothGattCharacteristic(
+        targetChar,
+        BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
+        BluetoothGattCharacteristic.PERMISSION_WRITE
+    )
     service.addCharacteristic(characteristic)
     gattServer?.addService(service)
     Log.i("GattServer", "GATT server started and service added.")
@@ -503,42 +534,41 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
             fileDataToSend = null
             return
         }
-        val chunkSize = Math.min(20, data.size - fileDataSendOffset)
+        val chunkSize = minOf(negotiatedMtu - 3, data.size - fileDataSendOffset)
         val chunk = data.copyOfRange(fileDataSendOffset, fileDataSendOffset + chunkSize)
+        lastChunkSize = chunkSize
         char.value = chunk
         char.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        val success = gatt.writeCharacteristic(char)
-        if (!success) {
+        if (!gatt.writeCharacteristic(char)) {
             Log.e("GattHandling", "Failed to write characteristic")
-            Handler(Looper.getMainLooper()).post {
-                Toast.makeText(this@gattHandling, "Failed to send chunk", Toast.LENGTH_SHORT).show()
-            }
         }
     }
 
     val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                Log.e("GattHandling", "GATT error: $status")
-                if (hasBluetoothConnectPermission()) {
+            when (newState) {
+                BluetoothProfile.STATE_CONNECTED -> {
+                    Log.i("GattHandling", "Connected. Requesting MTU.")
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        if (hasBluetoothConnectPermission()) gatt.requestMtu(512)
+                    }, 500)
+                }
+                BluetoothProfile.STATE_DISCONNECTED -> {
+                    Log.i("GattHandling", "Disconnected (status=$status)")
                     gatt.close()
+                    Handler(Looper.getMainLooper()).post {
+                        Toast.makeText(this@gattHandling, "Desktop Disconnected!", Toast.LENGTH_SHORT).show()
+                    }
                 }
-                return
-            }
-            if (newState == BluetoothProfile.STATE_CONNECTED) {
-                Log.i("GattHandling", "Connected to GATT server.")
-                if (hasBluetoothConnectPermission()) {
-                    gatt.discoverServices()
-                }
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                Log.i("GattHandling", "Disconnected from GATT server.")
-                gatt.close()
-            } else {
-                Log.w("GattHandling", "Other connection state: $newState")
-                gatt.close()
+                else -> Log.d("GattHandling", "State changed to $newState")
             }
         }
-
+        @RequiresPermission(value = Manifest.permission.BLUETOOTH_CONNECT)
+        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            negotiatedMtu = if (status == BluetoothGatt.GATT_SUCCESS) mtu else 23
+            Log.i("GattHandling", "MTU negotiated: $negotiatedMtu")
+            gatt.discoverServices()
+        }
         @RequiresPermission(value = Manifest.permission.BLUETOOTH_CONNECT)
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
@@ -561,22 +591,11 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
             status: Int
         ) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                fileDataSendOffset += characteristic.value?.size ?: 20
+                fileDataSendOffset += lastChunkSize
                 sendNextChunk(gatt)
             } else {
-                Log.e("GattHandling", "Characteristic write failed: $status")
+                Log.e("GattHandling", "Write failed: $status")
                 gatt.close()
-            }
-        }
-
-        @RequiresPermission(value = Manifest.permission.BLUETOOTH_CONNECT)
-        override fun onCharacteristicRead(
-            gatt: BluetoothGatt,
-            characteristic: android.bluetooth.BluetoothGattCharacteristic,
-            status: Int
-        ) {
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                Log.i("GattHandling", "Characteristic read successfully.")
             }
         }
     }

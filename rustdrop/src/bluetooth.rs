@@ -34,8 +34,8 @@ struct BlueData {
     service_uuid: Vec<bluest::Uuid>,
 }
 
-const TARGET_CHAR: Uuid = Uuid::from_u128(0x12345678_1234_5678_1234_56789abcdef1);
-const TARGET_SERVICE: Uuid = Uuid::from_u128(0x12345678_1234_5678_1234_56789abcdef0);
+const TARGET_CHAR: Uuid = Uuid::from_u128(0x00002AC5_0000_1000_8000_00805F9B34FB);
+const TARGET_SERVICE: Uuid = Uuid::from_u128(0x00001825_0000_1000_8000_00805F9B34FB);
 
 #[cfg(not(target_os = "android"))]
 use slint::{SharedString, Model};
@@ -43,7 +43,6 @@ use slint::{SharedString, Model};
 #[cfg(not(target_os = "android"))]
 async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str) -> bool {
     let mut service_char = None;
-    async_std::task::sleep(Duration::from_secs(3)).await;
     for attempt in 1..=5 {
         println!("Service discovery attempt {}/5...", attempt);
         let services = match timeout(Duration::from_secs(20), device.discover_services()).await {
@@ -57,26 +56,23 @@ async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str) -> 
             Ok(Ok(_)) => {
                 println!("No services found (empty cache). Retrying...");
                 let _ = adapter.disconnect_device(device).await;
-                async_std::task::sleep(Duration::from_secs(2)).await;
+                async_std::task::sleep(Duration::from_secs(1)).await;
                 let _ = adapter.connect_device(device).await;
-                async_std::task::sleep(Duration::from_secs(2)).await;
                 continue;
             }
             Ok(Err(e)) => {
                 println!("Service discovery error: {}. Retrying...", e);
                 let _ = adapter.disconnect_device(device).await;
-                async_std::task::sleep(Duration::from_secs(2)).await;
+                async_std::task::sleep(Duration::from_secs(1)).await;
                 let _ = adapter.connect_device(device).await;
-                async_std::task::sleep(Duration::from_secs(2)).await;
                 continue;
             }
             Err(_) => {
                 println!("Service discovery timed out. Retrying...");
                 if attempt >= 3 {
                     let _ = adapter.disconnect_device(device).await;
-                    async_std::task::sleep(Duration::from_secs(2)).await;
+                    async_std::task::sleep(Duration::from_secs(1)).await;
                     let _ = adapter.connect_device(device).await;
-                    async_std::task::sleep(Duration::from_secs(2)).await;
                 }
                 continue;
             }
@@ -104,7 +100,6 @@ async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str) -> 
         let _ = adapter.disconnect_device(device).await;
         async_std::task::sleep(Duration::from_secs(2)).await;
         let _ = adapter.connect_device(device).await;
-        async_std::task::sleep(Duration::from_secs(2)).await;
     }
     let file_name_str = std::path::Path::new(file_path).file_name().and_then(|name| name.to_str()).unwrap_or("unknown_file");
     let file_name = file_name_str.as_bytes();
@@ -186,11 +181,11 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                                 println!("Received file {} with {} bytes. Saving to {:?}", filename, file_data.len(), save_path);
                                 let mut waiting = 0;
                                 while !*file_accepted.lock().unwrap() && waiting < 300 {
-                                    async_std::task::sleep(std::time::Duration::from_millis(100)).await;
+                                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                                     waiting += 1;
                                 }
                                 
-                                if let Err(e) = async_std::fs::write(&save_path, file_data).await {
+                                if let Err(e) = std::fs::write(&save_path, file_data) {
                                     println!("Error saving file: {}", e);
                                 } else {
                                     println!("File saved successfully to {:?}", save_path);
@@ -253,6 +248,8 @@ pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
                 if let Some(path) = file {
                     let path_str = path.to_string_lossy().into_owned();
                     println!("{}", path_str);
+                    // Wait 1 second to guarantee the background scanner has fully shut down and released the Windows BLE radio!
+                    async_std::task::sleep(Duration::from_secs(1)).await;
                     match timeout(Duration::from_secs(10), adapter_connect.connect_device(&device_file)).await {
                         Ok(Ok(_)) => {
                             println!("Connected to {}", identifier.to_string());
@@ -287,33 +284,38 @@ pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
     });
     if *is_scanning.lock().unwrap() {
         println!("Scan started");
-        while let Some(discovered_device) = scan.next().await {
+        loop {
             if !*is_scanning.lock().unwrap() {
                 println!("Scan stopped");
                 break;
             }
-            if !discovered_device.adv_data.services.contains(&TARGET_SERVICE) {
-                continue;
-            }
-            let blue_data = BlueData {
-                identifier: discovered_device.device.name().as_deref().unwrap_or("(unknown)").to_string(),
-                signal_strength: discovered_device.rssi.map(|x| format!(" ({}dBm)", x)).unwrap_or_default(),
-                service_uuid: discovered_device.adv_data.services
-            };
-            let hashmap_identifier = discovered_device.device.clone();
-            let debug = discovered_device.device.name().as_deref().unwrap_or("(unknown)").to_string();
-            let mut hashmap = identifier_name_map.lock().unwrap();
-            hashmap.insert(blue_data.identifier.clone(), hashmap_identifier);
-            ui_handle_clone.upgrade_in_event_loop(move |ui| {
-                let mut devices: Vec<BlueDevice> = ui.get_blue_devices().iter().collect();
-                let identifier = blue_data.identifier.into();
-                if let Some(pos) = devices.iter().position(|d| d.identifier == identifier) {
-                    devices[pos] = BlueDevice { identifier }
-                } else {
-                    devices.push(BlueDevice { identifier })
+            match timeout(Duration::from_millis(500), scan.next()).await {
+                Ok(Some(discovered_device)) => {
+                    if !discovered_device.adv_data.services.contains(&TARGET_SERVICE) {
+                        continue;
+                    }
+                    let blue_data = BlueData {
+                        identifier: format!("{} ({:?})", discovered_device.device.name().as_deref().unwrap_or("(unknown)"), discovered_device.device.id()),
+                        signal_strength: discovered_device.rssi.map(|x| format!(" ({}dBm)", x)).unwrap_or_default(),
+                        service_uuid: discovered_device.adv_data.services
+                    };
+                    let hashmap_identifier = discovered_device.device.clone();
+                    let mut hashmap = identifier_name_map.lock().unwrap();
+                    hashmap.insert(blue_data.identifier.clone(), hashmap_identifier);
+                    ui_handle_clone.upgrade_in_event_loop(move |ui| {
+                        let mut devices: Vec<BlueDevice> = ui.get_blue_devices().iter().collect();
+                        let identifier = blue_data.identifier.into();
+                        if let Some(pos) = devices.iter().position(|d| d.identifier == identifier) {
+                            devices[pos] = BlueDevice { identifier }
+                        } else {
+                            devices.push(BlueDevice { identifier })
+                        }
+                        ui.set_blue_devices(slint::ModelRc::from(Rc::new(slint::VecModel::from(devices))));
+                    }).unwrap();
                 }
-                ui.set_blue_devices(slint::ModelRc::from(Rc::new(slint::VecModel::from(devices))));
-            }).unwrap();
+                Ok(None) => break,
+                Err(_) => continue,
+            }
         }
     }
 }

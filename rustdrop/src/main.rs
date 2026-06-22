@@ -31,8 +31,11 @@ async fn main() -> Result<(), Error> {
 
     let ui_blue_recv = ui_clone.clone();
     let file_accepted_blue = std::sync::Arc::clone(&file_accepted);
-    async_std::task::spawn(bluetooth::receive_file_blue(ui_blue_recv, file_accepted_blue));
-
+    std::thread::spawn(move || {
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(bluetooth::receive_file_blue(ui_blue_recv, file_accepted_blue));
+    });
     let file_accepted_wifi = std::sync::Arc::clone(&file_accepted);
     ui.on_send_mode(move |blue_or_wifi: bool| {
         if blue_or_wifi {

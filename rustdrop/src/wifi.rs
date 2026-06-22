@@ -7,6 +7,7 @@ use std::net::{TcpListener, TcpStream};
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::rc::Rc;
+use async_std::io::ReadExt;
 #[cfg(not(target_os = "android"))]
 use rfd::FileDialog;
 use chunked_transfer::{Encoder, Decoder};
@@ -43,20 +44,18 @@ fn send_file_wifi(ip: String, port: u32, file_path: &str) {
 }
 
 async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std::sync::Arc<std::sync::Mutex<bool>>) {
-    let listener = TcpListener::bind("0.0.0.0:5200").unwrap();
+    let listener = async_std::net::TcpListener::bind("0.0.0.0:5200").await.unwrap();
     loop {
-        match listener.accept() {
+        match listener.accept().await {
             Ok((mut socket, addr)) => {
                 *file_accepted.lock().unwrap() = false;
                 let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_receiving_file(true));
                 let mut len_buf = [0u8; 1];
-                let _ = socket.read_exact(&mut len_buf);
+                let _ = socket.read_exact(&mut len_buf).await;
                 let len = len_buf[0] as usize;
                 let mut filename_buf = vec![0u8; len];
-                let _ = socket.read_exact(&mut filename_buf);
+                let _ = socket.read_exact(&mut filename_buf).await;
                 let mut filename = String::new();
-                let encoded = vec![];
-                let mut decoded = String::new();
                 let mut filename_u8 = &filename_buf as &[u8];
                 let mut filename_decoder = Decoder::new(&mut filename_u8);
                 let _ = filename_decoder.read_to_string(&mut filename);
@@ -67,10 +66,8 @@ async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std
                 
                 let mut save_path = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
                 save_path.push(&filename);
-                let mut file = File::create(&save_path).unwrap();
-                let mut decoder = Decoder::new(&encoded as &[u8]);
-                let _ = decoder.read_to_string(&mut decoded);
-                match io::copy(&mut socket, &mut file) {
+                let mut file = async_std::fs::File::create(&save_path).await.unwrap();
+                match async_std::io::copy(&mut socket, &mut file).await {
                     Ok(bytes) => {
                         println!("Received {} bytes and saved to {:?}", bytes, save_path);
                         let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_receiving_file(false));
