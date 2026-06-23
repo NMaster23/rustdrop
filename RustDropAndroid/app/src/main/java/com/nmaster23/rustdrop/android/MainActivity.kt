@@ -644,7 +644,7 @@ fun MainActivity.mdnsHandling() {
         serviceName = "rustdrop"
         serviceType = "_rustdrop._tcp"
         port = 5200
-        setAttribute("hostname", "rustdrop.local.$devicename")
+        setAttribute("hostname", "rustdrop.$devicename.local")
     }
 
     val registrationListener = object : android.net.nsd.NsdManager.RegistrationListener {
@@ -746,7 +746,6 @@ fun MainActivity.mdnsHandling() {
             } catch (e: Exception) {}
         }
     }
-
     nsdManager.registerService(serviceInfo, android.net.nsd.NsdManager.PROTOCOL_DNS_SD, registrationListener)
     startDiscovery()
 }

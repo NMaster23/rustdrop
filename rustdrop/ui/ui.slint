@@ -12,67 +12,56 @@ struct BlueDevice {
 export component AppWindow inherits Window {
     width: 600px;
     height: 600px;
-    in-out property <bool> blue_or_wifi;
-    in-out property <bool> mode_select: true;
-    in-out property <bool> wifi_scan_menu: false;
-    in-out property <bool> blue_scan_menu: false;
     in-out property <[WifiDevice]> wifi_devices: [];
     in-out property <[BlueDevice]> blue_devices: [];
     in-out property <bool> sending_file;
     in-out property <bool> blue_connected_menu;
     in-out property <bool> receiving_file: false;
 
-    callback send_mode(bool);
-    callback send_scan(bool);
     callback send_select_device_wifi(string);
     callback send_select_device_blue(string);
     callback disconnect();
     callback file_accept();
     
-    if (mode_select):
-        VerticalLayout {    
-            Button {
-                text: "Bluetooth";
-                clicked => {
-                    blue_or_wifi = true;
-                    send_mode(blue_or_wifi);
-                    mode_select = false;
-                    blue_scan_menu = true;
-                }
-            }
-            Button {
-                text: "Wi-Fi";
-                clicked => {
-                    blue_or_wifi = false;
-                    send_mode(blue_or_wifi);
-                    mode_select = false;
-                    wifi_scan_menu = true;
-                }
-            }
-        }
-    if (wifi_scan_menu): ScrollView {
+    if (!blue_connected_menu && !receiving_file): ScrollView {
         VerticalLayout {
-            spacing: 5px;
-            for device[i] in wifi_devices: Button {
-                height: 40px;
-                text: device.name + " (" + device.ip + ") ";
-                clicked => {
-                    self.text = "File Sent Successfully";
-                    send_select_device_wifi(device.ip);
+            spacing: 10px;
+            padding: 10px;
+
+            Text {
+                text: "Wi-Fi Devices";
+                font-size: 16px;
+                font-weight: 700;
+            }
+
+            VerticalLayout {
+                spacing: 5px;
+                for device[i] in wifi_devices: Button {
+                    height: 40px;
+                    text: device.name + " (" + device.ip + ") ";
+                    clicked => {
+                        self.text = "File Sent Successfully";
+                        send_select_device_wifi(device.ip);
+                    }
                 }
             }
-        }
-    }
-    if (blue_scan_menu && !blue_connected_menu && !receiving_file): ScrollView {
-        VerticalLayout {
-            spacing: 5px;
-            for device[i] in blue_devices: Button {
-                height: 40px;
-                text: device.identifier;
-                clicked => {
-                    self.text = "Pairing";
-                    send_select_device_blue(device.identifier);
-                    blue_connected_menu = true;
+
+            Text {
+                text: "Bluetooth Devices";
+                font-size: 16px;
+                font-weight: 700;
+            }
+
+            VerticalLayout {
+                spacing: 5px;
+                for device[i] in blue_devices: Button {
+                    height: 40px;
+                    text: device.identifier;
+                    clicked => {
+                        self.text = "Pairing";
+                        send_select_device_blue(device.identifier);
+                        blue_connected_menu = true;
+                    }
                 }
             }
         }
