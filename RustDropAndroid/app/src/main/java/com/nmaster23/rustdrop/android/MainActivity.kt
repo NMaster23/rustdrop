@@ -81,11 +81,18 @@ fun android.content.Context.hasBluetoothAdvertisePermission(): Boolean {
     }
 }
 
+fun android.content.Context.hasMulticastPermission(): Boolean {
+    return androidx.core.content.ContextCompat.checkSelfPermission(this, Manifest.permission.CHANGE_WIFI_MULTICAST_STATE) == PackageManager.PERMISSION_GRANTED
+}
+
 class MainActivity : ComponentActivity() {
     var isScanning = false
 
     var gattServer: android.bluetooth.BluetoothGattServer? = null
     var gattServerCallbackRef: android.bluetooth.BluetoothGattServerCallback? = null
+    var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
+    var nsdRegistrationListener: android.net.nsd.NsdManager.RegistrationListener? = null
+    var nsdDiscoveryListener: android.net.nsd.NsdManager.DiscoveryListener? = null
     var selectedDeviceForSending: BluetoothDevice? = null
     var fileDataToSend: ByteArray? = null
     var fileDataSendOffset = 0
@@ -169,6 +176,18 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         gattServer?.close()
         gattServer = null
+        val nsdManager = getSystemService(android.content.Context.NSD_SERVICE) as android.net.nsd.NsdManager
+        nsdRegistrationListener?.let { nsdManager.unregisterService(it) }
+        nsdDiscoveryListener?.let {
+            try {
+                nsdManager.stopServiceDiscovery(it)
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Error stopping discovery on destroy", e)
+            }
+        }
+        if (multicastLock?.isHeld == true) {
+            multicastLock?.release()
+        }
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -256,7 +275,7 @@ fun MainActivity.permissionHandling() {
             Manifest.permission.BLUETOOTH_ADVERTISE,
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION,
-            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.BLUETOOTH_CONNECT
         )
     )
 }
@@ -637,14 +656,13 @@ fun MainActivity.mdnsHandling() {
         InetAddress.getLocalHost().hostName
     } catch (_: Exception) {
         android.os.Build.MODEL
-    }
-    val serviceNameInfo = "rustdrop"
+    }.replace(Regex("[^a-zA-Z0-9]"), "")
+    val serviceNameInfo = "rustdrop-$devicename"
     val serviceTypeInfo = "_rustdrop._tcp"
     val serviceInfo = NsdServiceInfo().apply {
-        serviceName = "rustdrop"
+        serviceName = "rustdrop-$devicename"
         serviceType = "_rustdrop._tcp"
         port = 5200
-        setAttribute("hostname", "rustdrop.$devicename.local")
     }
 
     val registrationListener = object : android.net.nsd.NsdManager.RegistrationListener {
@@ -659,26 +677,19 @@ fun MainActivity.mdnsHandling() {
         override fun onServiceUnregistered(arg0: NsdServiceInfo) {}
         override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
     }
+    nsdRegistrationListener = registrationListener
 
     val nsdManager = getSystemService(android.content.Context.NSD_SERVICE) as android.net.nsd.NsdManager
+    val wifiManager = getSystemService(android.content.Context.WIFI_SERVICE) as android.net.wifi.WifiManager
 
-    val resolveListener = object : NsdManager.ResolveListener {
-        override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-            Log.e(TAG, "Resolve failed: $errorCode")
-        }
-
-        override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
-            Log.i(TAG, "Resolve Succeeded. $serviceInfo")
-            val host: InetAddress = serviceInfo.host
-            val port: Int = serviceInfo.port
-            Log.d(TAG, "Resolved address: ${host.hostAddress}:$port")
-            Handler(Looper.getMainLooper()).post {
-                if (discoveredWifiDevices.none { it.serviceName == serviceInfo.serviceName }) {
-                    discoveredWifiDevices.add(serviceInfo)
-                }
-            }
+    if (hasMulticastPermission()) {
+        multicastLock = wifiManager.createMulticastLock("RustDropMulticastLock").apply {
+            setReferenceCounted(true)
+            acquire()
         }
     }
+
+
     var discoveryListener: NsdManager.DiscoveryListener? = null
     var isDiscoveryActive = false
     fun startDiscovery() {
@@ -707,7 +718,19 @@ fun MainActivity.mdnsHandling() {
                 service.serviceName.contains("rustdrop") -> {
                     if (discoveredWifiDevices.none { it.serviceName == service.serviceName }) {
                         try {
-                            nsdManager.resolveService(service, resolveListener)
+                            nsdManager.resolveService(service, object : NsdManager.ResolveListener {
+                                override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+                                    Log.e(TAG, "Resolve failed: $errorCode")
+                                }
+                                override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
+                                    Log.i(TAG, "Resolve Succeeded. $serviceInfo")
+                                    Handler(Looper.getMainLooper()).post {
+                                        if (discoveredWifiDevices.none { it.serviceName == serviceInfo.serviceName }) {
+                                            discoveredWifiDevices.add(serviceInfo)
+                                        }
+                                    }
+                                }
+                            })
                         } catch (e: Exception) {
                             Log.e(TAG, "Error resolving service", e)
                         }
@@ -746,6 +769,7 @@ fun MainActivity.mdnsHandling() {
             } catch (e: Exception) {}
         }
     }
+    nsdDiscoveryListener = discoveryListener
     nsdManager.registerService(serviceInfo, android.net.nsd.NsdManager.PROTOCOL_DNS_SD, registrationListener)
-    startDiscovery()
+    nsdManager.discoverServices(serviceTypeInfo, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
 }
