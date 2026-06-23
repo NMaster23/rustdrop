@@ -26,9 +26,12 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.ContentValues.TAG
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaScannerConnection
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
@@ -46,6 +49,7 @@ import androidx.core.content.ContextCompat
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.net.InetAddress
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -153,6 +157,7 @@ class MainActivity : ComponentActivity() {
         }
     }
     val discoveredDevices = mutableStateListOf<BluetoothDevice>()
+    val discoveredWifiDevices = mutableStateListOf<NsdServiceInfo>()
     val enableBluetoothLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -169,6 +174,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         permissionHandling()
+        mdnsHandling()
         if (hasBluetoothConnectPermission()) {
             gattServerHandling()
         }
@@ -178,11 +184,15 @@ class MainActivity : ComponentActivity() {
                     UserInterface(
                         modifier = Modifier.padding(innerPadding),
                         devices = discoveredDevices,
+                        wifiDevices = discoveredWifiDevices,
                         onRefresh = { scanBleDevices() },
                         onDeviceClick = { device ->
                             selectedDeviceForSending = device
                             android.widget.Toast.makeText(this@MainActivity, "Select a file to send...", android.widget.Toast.LENGTH_SHORT).show()
                             filePickerLauncher.launch("*/*")
+                        },
+                        onWifiDeviceClick = { service ->
+                            android.widget.Toast.makeText(this@MainActivity, "WiFi device: ${service.serviceName}", android.widget.Toast.LENGTH_SHORT).show()
                         }
                     )
                 }
@@ -195,14 +205,20 @@ class MainActivity : ComponentActivity() {
 fun UserInterface(
     modifier: Modifier = Modifier,
     devices: List<BluetoothDevice>,
+    wifiDevices: List<NsdServiceInfo> = emptyList(),
     onRefresh: () -> Unit = {},
-    onDeviceClick: (BluetoothDevice) -> Unit = {}
+    onDeviceClick: (BluetoothDevice) -> Unit = {},
+    onWifiDeviceClick: (NsdServiceInfo) -> Unit = {}
 ) {
     Column(modifier = modifier.padding(16.dp)) {
         Button(
             onClick = onRefresh
         ) {
             Text("Refresh Discovery")
+        }
+
+        if (devices.isNotEmpty()) {
+            Text("Bluetooth Devices:", modifier = Modifier.padding(top = 16.dp))
         }
         devices.forEach { device ->
             val name = if (androidx.compose.ui.platform.LocalContext.current.hasBluetoothConnectPermission()) {
@@ -216,6 +232,18 @@ fun UserInterface(
                 modifier = Modifier.padding(top = 8.dp)
             ) {
                 Text(text = name)
+            }
+        }
+
+        if (wifiDevices.isNotEmpty()) {
+            Text("WiFi Devices:", modifier = Modifier.padding(top = 16.dp))
+        }
+        wifiDevices.forEach { service ->
+            Button(
+                onClick = { onWifiDeviceClick(service) },
+                modifier = Modifier.padding(top = 8.dp)
+            ) {
+                Text(text = service.serviceName)
             }
         }
     }
@@ -602,4 +630,123 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
     if (hasBluetoothConnectPermission()) {
         device.connectGatt(this, false, gattCallback)
     }
+}
+
+fun MainActivity.mdnsHandling() {
+    val devicename = try {
+        InetAddress.getLocalHost().hostName
+    } catch (_: Exception) {
+        android.os.Build.MODEL
+    }
+    val serviceNameInfo = "rustdrop"
+    val serviceTypeInfo = "_rustdrop._tcp"
+    val serviceInfo = NsdServiceInfo().apply {
+        serviceName = "rustdrop"
+        serviceType = "_rustdrop._tcp"
+        port = 5200
+        setAttribute("hostname", "rustdrop.local.$devicename")
+    }
+
+    val registrationListener = object : android.net.nsd.NsdManager.RegistrationListener {
+        override fun onServiceRegistered(registeredServiceInfo: NsdServiceInfo) {
+            Log.i("mDNS", "Service registered: ${registeredServiceInfo.serviceName}")
+        }
+
+        override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+            Log.e("mDNS", "Registration failed: $errorCode")
+        }
+
+        override fun onServiceUnregistered(arg0: NsdServiceInfo) {}
+        override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
+    }
+
+    val nsdManager = getSystemService(android.content.Context.NSD_SERVICE) as android.net.nsd.NsdManager
+
+    val resolveListener = object : NsdManager.ResolveListener {
+        override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+            Log.e(TAG, "Resolve failed: $errorCode")
+        }
+
+        override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
+            Log.i(TAG, "Resolve Succeeded. $serviceInfo")
+            val host: InetAddress = serviceInfo.host
+            val port: Int = serviceInfo.port
+            Log.d(TAG, "Resolved address: ${host.hostAddress}:$port")
+            Handler(Looper.getMainLooper()).post {
+                if (discoveredWifiDevices.none { it.serviceName == serviceInfo.serviceName }) {
+                    discoveredWifiDevices.add(serviceInfo)
+                }
+            }
+        }
+    }
+    var discoveryListener: NsdManager.DiscoveryListener? = null
+    var isDiscoveryActive = false
+    fun startDiscovery() {
+        if (isDiscoveryActive) return
+        discoveryListener?.let {
+            try {
+                nsdManager.discoverServices(serviceTypeInfo, NsdManager.PROTOCOL_DNS_SD, it)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error starting discovery", e)
+            }
+        }
+    }
+    discoveryListener = object : NsdManager.DiscoveryListener {
+        override fun onDiscoveryStarted(regType: String) {
+            Log.d(TAG, "Service discovery started")
+            isDiscoveryActive = true
+        }
+        override fun onServiceFound(service: NsdServiceInfo) {
+            Log.d(TAG, "Service discovery success$service")
+            val typeMatched = service.serviceType.contains(serviceTypeInfo)
+            when {
+                !typeMatched ->
+                    Log.d(TAG, "Unknown Service Type: ${service.serviceType}")
+                service.serviceName == serviceNameInfo ->
+                    Log.d(TAG, "Same machine: $serviceNameInfo")
+                service.serviceName.contains("rustdrop") -> {
+                    if (discoveredWifiDevices.none { it.serviceName == service.serviceName }) {
+                        try {
+                            nsdManager.resolveService(service, resolveListener)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error resolving service", e)
+                        }
+                    }
+                }
+            }
+        }
+        override fun onServiceLost(service: NsdServiceInfo) {
+            Log.e(TAG, "service lost: $service")
+            Handler(Looper.getMainLooper()).post {
+                discoveredWifiDevices.removeAll { it.serviceName == service.serviceName }
+            }
+        }
+        override fun onDiscoveryStopped(serviceType: String) {
+            Log.i(TAG, "Discovery stopped: $serviceType. Restarting...")
+            isDiscoveryActive = false
+            Handler(Looper.getMainLooper()).postDelayed({
+                startDiscovery()
+            }, 2000)
+        }
+        override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+            Log.e(TAG, "Discovery failed: Error code:$errorCode")
+            isDiscoveryActive = false
+            try {
+                nsdManager.stopServiceDiscovery(this)
+            } catch (e: Exception) {}
+            Handler(Looper.getMainLooper()).postDelayed({
+                startDiscovery()
+            }, 5000)
+        }
+        override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
+            Log.e(TAG, "Stop Discovery failed: Error code:$errorCode")
+            isDiscoveryActive = false
+            try {
+                nsdManager.stopServiceDiscovery(this)
+            } catch (e: Exception) {}
+        }
+    }
+
+    nsdManager.registerService(serviceInfo, android.net.nsd.NsdManager.PROTOCOL_DNS_SD, registrationListener)
+    startDiscovery()
 }

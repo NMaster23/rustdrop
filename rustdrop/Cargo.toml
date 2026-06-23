@@ -19,6 +19,7 @@ rfd = "0.17.2"
 ble-peripheral-rust = "0.2.0"
 slint = { version = "1.16.1", features = ["backend-android-activity-06"] }
 dirs = "6.0.0"
+whoami = "2.1.2"
 
 [build-dependencies]
 slint-build = "1.16.1"

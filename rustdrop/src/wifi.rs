@@ -84,14 +84,14 @@ async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std
 pub(crate) async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>, file_accepted: std::sync::Arc<std::sync::Mutex<bool>>) {
     let service_type = "_rustdrop._tcp.local.";
     let instance_name = "rustdrop";
-    let host_name = "rustdrop.local.";
+    let host_name = format!("rustdrop.local.{}", whoami::hostname().unwrap_or_else(|_| "<unknown>".to_string()));
     let port = 5200;
     let receiver = mdns.browse(service_type).expect("Failed to browse");
     let ip = local_ip().unwrap().to_string();
     let rustdrop_service = ServiceInfo::new(
         service_type,
         instance_name,
-        host_name,
+        host_name.as_str(),
         ip,
         port,
         None,
