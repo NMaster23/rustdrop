@@ -16,7 +16,11 @@ use chunked_transfer::{Encoder, Decoder};
 use slint::{SharedString, Model};
 
 fn send_file_wifi(ip: String, port: u32, file_path: &str) {
-    let addr = format!("{}:{}", ip, port);
+    let addr = if ip.contains(':') {
+        format!("[{}]:{}", ip, port)
+    } else {
+        format!("{}:{}", ip, port)
+    };
     if let Ok(mut stream) = TcpStream::connect(&addr) {
         println!("Connected to the server!");
         if let Ok(mut file) = File::open(file_path) {
@@ -84,7 +88,7 @@ async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std
 pub(crate) async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>, file_accepted: std::sync::Arc<std::sync::Mutex<bool>>) {
     let service_type = "_rustdrop._tcp.local.";
     let instance_name = format!("rustdrop.{}", whoami::hostname().unwrap_or_else(|_| "<unknown>".to_string()));
-    let host_name = format!("rustdrop.{}.local", whoami::hostname().unwrap_or_else(|_| "<unknown>".to_string()));
+    let host_name = format!("rustdrop.{}.local.", whoami::hostname().unwrap_or_else(|_| "<unknown>".to_string()));
     let port = 5200;
     let receiver = mdns.browse(service_type).expect("Failed to browse");
     let ip = local_ip().unwrap().to_string();
@@ -96,6 +100,7 @@ pub(crate) async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>,
         port,
         None,
     ).unwrap();
+    println!("{}", host_name);
     mdns.register(rustdrop_service).expect("Failed to register our service");
     let ui_handle_recv = ui_handle.clone();
     async_std::task::spawn(async move {
@@ -107,7 +112,7 @@ pub(crate) async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>,
             if let ServiceEvent::ServiceResolved(resolved) = event {
                 println!("Resolved a new service: {}", resolved.fullname);
                 let name = resolved.get_hostname().to_string();
-                let ip = resolved.get_addresses().into_iter().map(|a| a.to_string()).next().unwrap_or_default();
+                let ip = resolved.get_addresses().iter().find(|a| a.is_ipv4()).or_else(|| resolved.get_addresses().iter().next()).map(|a| a.to_string()).unwrap_or_default();
                 ui_handle_clone.upgrade_in_event_loop(move |ui| {
                     let mut devices: Vec<WifiDevice> = ui.get_wifi_devices().iter().collect();
                     devices.push(WifiDevice {

@@ -30,6 +30,7 @@ import android.content.ContentValues.TAG
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaScannerConnection
+import android.net.Uri
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Environment
@@ -94,35 +95,50 @@ class MainActivity : ComponentActivity() {
     var nsdRegistrationListener: android.net.nsd.NsdManager.RegistrationListener? = null
     var nsdDiscoveryListener: android.net.nsd.NsdManager.DiscoveryListener? = null
     var selectedDeviceForSending: BluetoothDevice? = null
-    var fileDataToSend: ByteArray? = null
-    var fileDataSendOffset = 0
+    var bleSendingHeader: ByteArray? = null
+    var bleSendingUri: Uri? = null
+    var bleSendingTotalSize: Long = 0L
+    var bleSendingOffset = 0L
+    var bleInputStream: java.io.InputStream? = null
     var targetCharacteristic: BluetoothGattCharacteristic? = null
     var currentOutputFile: File? = null
     var lastChunkSize = 0
     var negotiatedMtu = 23
+    var selectedWifiDevice: String? = null
     val filePickerLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri != null && selectedDeviceForSending != null) {
-            val inputStream = contentResolver.openInputStream(uri)
-            val fileBytes = inputStream?.readBytes() ?: return@registerForActivityResult
+        if (uri == null) return@registerForActivityResult
+        if (selectedDeviceForSending != null) {
             val fileName = getFileName(uri) ?: "UnknownFile"
             val fileNameBytes = fileName.toByteArray(Charsets.UTF_8)
             val nameLen = fileNameBytes.size
+            val fileSize = getFileSize(uri)
 
             val headerBuffer = ByteBuffer.allocate(8 + 1 + nameLen)
             headerBuffer.order(ByteOrder.LITTLE_ENDIAN)
-            headerBuffer.putLong(fileBytes.size.toLong())
+            headerBuffer.putLong(fileSize)
             headerBuffer.put(nameLen.toByte())
             headerBuffer.put(fileNameBytes)
 
-            val fullData = headerBuffer.array() + fileBytes
-            fileDataToSend = fullData
-            fileDataSendOffset = 0
+            bleSendingHeader = headerBuffer.array()
+            bleSendingUri = uri
+            bleSendingTotalSize = fileSize
+            bleSendingOffset = 0L
+            bleInputStream?.close()
+            bleInputStream = null
 
             gattHandling(selectedDeviceForSending!!)
+        } else if (selectedWifiDevice != null) {
+            sendFileWifi(selectedWifiDevice!!, uri)
         }
     }
 
-    private fun getFileName(uri: android.net.Uri): String? {
+    private fun getFileSize(uri: android.net.Uri): Long {
+        return contentResolver.openAssetFileDescriptor(uri, "r")?.use {
+            it.length
+        } ?: 0L
+    }
+
+    fun getFileName(uri: android.net.Uri): String? {
         var result: String? = null
         if (uri.scheme == "content") {
             val cursor = contentResolver.query(uri, null, null, null, null)
@@ -194,6 +210,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         permissionHandling()
         mdnsHandling()
+        startWifiServer()
         if (hasBluetoothConnectPermission()) {
             gattServerHandling()
         }
@@ -207,11 +224,14 @@ class MainActivity : ComponentActivity() {
                         onRefresh = { scanBleDevices() },
                         onDeviceClick = { device ->
                             selectedDeviceForSending = device
+                            selectedWifiDevice = null
                             android.widget.Toast.makeText(this@MainActivity, "Select a file to send...", android.widget.Toast.LENGTH_SHORT).show()
                             filePickerLauncher.launch("*/*")
                         },
                         onWifiDeviceClick = { service ->
-                            android.widget.Toast.makeText(this@MainActivity, "WiFi device: ${service.serviceName}", android.widget.Toast.LENGTH_SHORT).show()
+                            selectedWifiDevice = service.host.hostAddress
+                            selectedDeviceForSending = null
+                            filePickerLauncher.launch("*/*")
                         }
                     )
                 }
@@ -570,25 +590,33 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
     }
 
     fun sendNextChunk(gatt: BluetoothGatt) {
-        val data = fileDataToSend ?: return
         val char = targetCharacteristic ?: return
-        if (fileDataSendOffset >= data.size) {
+        val header = bleSendingHeader ?: return
+        val hSize = header.size.toLong()
+
+        if (bleSendingOffset >= hSize + bleSendingTotalSize) {
             Log.i("GattHandling", "Finished sending file")
-            Handler(Looper.getMainLooper()).post {
-                Toast.makeText(this@gattHandling, "File Sent!", Toast.LENGTH_SHORT).show()
-            }
+            bleInputStream?.close(); bleInputStream = null
+            Handler(Looper.getMainLooper()).post { Toast.makeText(this@gattHandling, "File Sent!", Toast.LENGTH_SHORT).show() }
             gatt.close()
-            fileDataToSend = null
             return
         }
-        val chunkSize = minOf(negotiatedMtu - 3, data.size - fileDataSendOffset)
-        val chunk = data.copyOfRange(fileDataSendOffset, fileDataSendOffset + chunkSize)
-        lastChunkSize = chunkSize
+
+        val chunkSize = minOf(negotiatedMtu - 3, (hSize + bleSendingTotalSize - bleSendingOffset).toInt())
+        val chunk = if (bleSendingOffset < hSize) {
+            header.copyOfRange(bleSendingOffset.toInt(), bleSendingOffset.toInt() + minOf(chunkSize, (hSize - bleSendingOffset).toInt()))
+        } else {
+            if (bleInputStream == null) bleInputStream = contentResolver.openInputStream(bleSendingUri!!)
+            val buf = ByteArray(chunkSize)
+            val read = bleInputStream?.read(buf) ?: -1
+            if (read <= 0) { gatt.close(); return }
+            if (read < chunkSize) buf.copyOfRange(0, read) else buf
+        }
+
+        lastChunkSize = chunk.size
         char.value = chunk
         char.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        if (!gatt.writeCharacteristic(char)) {
-            Log.e("GattHandling", "Failed to write characteristic")
-        }
+        if (!gatt.writeCharacteristic(char)) Log.e("GattHandling", "Failed to write")
     }
 
     val gattCallback = object : BluetoothGattCallback() {
@@ -602,6 +630,7 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.i("GattHandling", "Disconnected (status=$status)")
+                    bleInputStream?.close(); bleInputStream = null
                     gatt.close()
                     Handler(Looper.getMainLooper()).post {
                         Toast.makeText(this@gattHandling, "Desktop Disconnected!", Toast.LENGTH_SHORT).show()
@@ -622,7 +651,7 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
                 Log.i("GattHandling", "Services discovered.")
                 val service = gatt.getService(targetService)
                 targetCharacteristic = service?.getCharacteristic(targetChar)
-                if (targetCharacteristic != null && fileDataToSend != null) {
+                if (targetCharacteristic != null && bleSendingUri != null) {
                     sendNextChunk(gatt)
                 } else {
                     Log.e("GattHandling", "Target characteristic not found or no file data.")
@@ -638,10 +667,11 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
             status: Int
         ) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                fileDataSendOffset += lastChunkSize
+                bleSendingOffset += lastChunkSize
                 sendNextChunk(gatt)
             } else {
                 Log.e("GattHandling", "Write failed: $status")
+                bleInputStream?.close(); bleInputStream = null
                 gatt.close()
             }
         }
@@ -772,4 +802,8 @@ fun MainActivity.mdnsHandling() {
     nsdDiscoveryListener = discoveryListener
     nsdManager.registerService(serviceInfo, android.net.nsd.NsdManager.PROTOCOL_DNS_SD, registrationListener)
     nsdManager.discoverServices(serviceTypeInfo, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
+}
+
+fun chunkEncode(uri: Uri) {
+
 }
