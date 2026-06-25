@@ -210,7 +210,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         permissionHandling()
         mdnsHandling()
-        startWifiServer()
+        wifiServer()
         if (hasBluetoothConnectPermission()) {
             gattServerHandling()
         }
@@ -804,6 +804,68 @@ fun MainActivity.mdnsHandling() {
     nsdManager.discoverServices(serviceTypeInfo, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
 }
 
-fun chunkEncode(uri: Uri) {
+fun MainActivity.wifiServer() {
+    Thread {
+        try {
+            val serverSocket = java.net.ServerSocket(5200)
+            while (true) {
+                serverSocket.accept().use { socket ->
+                    val inputStream = socket.getInputStream()
+                    val encLen = inputStream.read()
+                    if (encLen <= 0) return@use
+                    val nameBytes = ByteArray(encLen)
+                    var read = 0
+                    while (read < encLen) {
+                        val r = inputStream.read(nameBytes, read, encLen - read)
+                        if (r == -1) break
+                        read += r
+                    }
+                    val rawName = String(nameBytes, Charsets.UTF_8)
+                    val fileName = rawName.substringAfter("\r\n").substringBefore("\r\n")
+                        .replace(Regex("[^a-zA-Z0-9.\\-_]"), "")
+                        .ifEmpty { "wifi_transfer_${System.currentTimeMillis()}" }
+                    val downloadDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: cacheDir
+                    val outputFile = File(downloadDir, fileName)
+                    
+                    FileOutputStream(outputFile).use { fos ->
+                        inputStream.copyTo(fos)
+                    }
 
+                    MediaScannerConnection.scanFile(this@wifiServer, arrayOf(outputFile.absolutePath), null, null)
+                    Handler(Looper.getMainLooper()).post {
+                        Toast.makeText(this@wifiServer, "Received via WiFi: $fileName", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("WifiServer", "Error: ${e.message}")
+        }
+    }.start()
+}
+
+fun MainActivity.sendFileWifi(ip: String, uri: Uri) {
+    Thread {
+        try {
+            java.net.Socket(ip, 5200).use { socket ->
+                val output = socket.getOutputStream()
+                val fileName = getFileName(uri) ?: "file"
+                val nameAsBytes = fileName.toByteArray(Charsets.UTF_8)
+                val nameEncoded = "${nameAsBytes.size.toString(16)}\r\n$fileName\r\n0\r\n\r\n".toByteArray(Charsets.UTF_8)
+                output.write(nameEncoded.size)
+                output.write(nameEncoded)
+                contentResolver.openInputStream(uri)?.use { inputStream ->
+                    inputStream.copyTo(output)
+                }
+                output.flush()
+                Handler(Looper.getMainLooper()).post {
+                    Toast.makeText(this@sendFileWifi, "WiFi File Sent!", Toast.LENGTH_SHORT).show()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("WifiSend", "Error: ${e.message}")
+            Handler(Looper.getMainLooper()).post {
+                Toast.makeText(this@sendFileWifi, "WiFi Send Failed", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }.start()
 }
