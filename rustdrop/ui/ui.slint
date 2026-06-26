@@ -76,16 +76,19 @@ export component AppWindow inherits Window {
             disconnect();
         }
     }
-    if (receiving_file): HorizontalLayout {
+    if (receiving_file): VerticalLayout {
         alignment: center;
         spacing: 10px;
         Button {
+            primary: true;
+            height: 50px;
             text: "Accept";
             clicked => {
                 file_accept();
             }
         }
         Button {
+            height: 50px;
             text: "Reject";
             clicked => {
                 file_reject();
