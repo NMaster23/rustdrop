@@ -136,7 +136,7 @@ async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str, ui_
 }
 
 #[cfg(not(target_os = "android"))]
-pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_accepted: Arc<Mutex<bool>>) {
+pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_accepted: Arc<Mutex<Option<bool>>>) {
     let (sender_tx, mut receiver_rx) = channel::<PeripheralEvent>(256);
     let mut peripheral = Peripheral::new(sender_tx).await.unwrap();
     while !peripheral.is_powered().await.unwrap() {}
@@ -164,7 +164,7 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                         let _ = responder.send(WriteRequestResponse { response: RequestResponse::Success });
 
                         if !is_receiving {
-                            *file_accepted.lock().unwrap() = false;
+                            *file_accepted.lock().unwrap() = None;
                             let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_receiving_file(true));
                             is_receiving = true;
                         }
@@ -172,7 +172,7 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                         received_data.extend_from_slice(&value);
                         if received_data.len() >= 9 {
                             let mut size_bytes = [0u8; 8];
-                            size_bytes.copy_from_slice(&received_data[0..8]); // Extract the 8 bytes
+                            size_bytes.copy_from_slice(&received_data[0..8]);
                             let expected_file_size = u64::from_le_bytes(size_bytes) as usize;
                             let name_len = received_data[8] as usize;
                             let header_size = 9 + name_len;
@@ -190,17 +190,23 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                                 let file_msg = format!("Received file {} with {} bytes. Saving to {:?}", filename, file_data.len(), save_path);
                                 let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(file_msg.clone().into()));
                                 let mut waiting = 0;
-                                while !*file_accepted.lock().unwrap() && waiting < 300 {
+                                while file_accepted.lock().unwrap().is_none() && waiting < 300 {
                                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                                     waiting += 1;
                                 }
                                 
-                                if let Err(e) = std::fs::write(&save_path, file_data) {
-                                    let err_msg = format!("Error saving file: {}", e);
-                                    let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(err_msg.clone().into()));
+                                if let Some(true) = *file_accepted.lock().unwrap() {
+                                    if let Err(e) = std::fs::write(&save_path, file_data) {
+                                        let err_msg = format!("Error saving file: {}", e);
+                                        let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(err_msg.clone().into()));
+                                    } else {
+                                        let save_msg = format!("File saved successfully to {:?}", save_path);
+                                        let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(save_msg.clone().into()));
+                                    }
                                 } else {
-                                    let save_msg = format!("File saved successfully to {:?}", save_path);
-                                    let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(save_msg.clone().into()));
+                                    let _ = ui_handle.upgrade_in_event_loop(move |ui| {
+                                        ui.set_transfer_status("File transfer rejected or timed out".into());
+                                    });
                                 }
                                 let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_receiving_file(false));
                                 is_receiving = false;

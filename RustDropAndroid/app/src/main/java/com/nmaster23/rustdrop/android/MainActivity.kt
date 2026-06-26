@@ -105,6 +105,9 @@ class MainActivity : ComponentActivity() {
     var lastChunkSize = 0
     var negotiatedMtu = 23
     var selectedWifiDevice: String? = null
+    val incomingFileRequest = androidx.compose.runtime.mutableStateOf<String?>(null)
+    var acceptCallback: (() -> Unit)? = null
+    var rejectCallback: (() -> Unit)? = null
     val filePickerLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@registerForActivityResult
         if (selectedDeviceForSending != null) {
@@ -234,6 +237,30 @@ class MainActivity : ComponentActivity() {
                             filePickerLauncher.launch("*/*")
                         }
                     )
+
+                    val request = incomingFileRequest.value
+                    if (request != null) {
+                        androidx.compose.material3.AlertDialog(
+                            onDismissRequest = {
+                                rejectCallback?.invoke()
+                                incomingFileRequest.value = null
+                            },
+                            title = { Text("Incoming File") },
+                            text = { Text("Accept file: $request?") },
+                            confirmButton = {
+                                Button(onClick = {
+                                    acceptCallback?.invoke()
+                                    incomingFileRequest.value = null
+                                }) { Text("Accept") }
+                            },
+                            dismissButton = {
+                                Button(onClick = {
+                                    rejectCallback?.invoke()
+                                    incomingFileRequest.value = null
+                                }) { Text("Reject") }
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -454,7 +481,6 @@ fun MainActivity.gattServerHandling() {
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.i("GattServer", "Device disconnected: $deviceName")
-                    // Reset transfer state on disconnect
                     isReceivingFile = false
                     bytesReceived = 0
                     headerBuffer.reset()
@@ -505,6 +531,38 @@ fun MainActivity.gattServerHandling() {
                             if (incomingFileName.isEmpty()) {
                                 incomingFileName = "RustDrop_File_Error"
                             }
+                            
+                            val latch = java.util.concurrent.CountDownLatch(1)
+                            var accepted = false
+                            Handler(Looper.getMainLooper()).post {
+                                incomingFileRequest.value = incomingFileName
+                                acceptCallback = {
+                                    accepted = true
+                                    latch.countDown()
+                                }
+                                rejectCallback = {
+                                    accepted = false
+                                    latch.countDown()
+                                }
+                            }
+                            try { latch.await(30, java.util.concurrent.TimeUnit.SECONDS) } catch(e: Exception) {}
+                            
+                            if (!accepted) {
+                                Handler(Looper.getMainLooper()).post {
+                                    incomingFileRequest.value = null
+                                    Toast.makeText(this@gattServerHandling, "File rejected", Toast.LENGTH_SHORT).show()
+                                }
+                                isReceivingFile = false
+                                bytesReceived = 0
+                                headerBuffer.reset()
+                                if (responseNeeded) {
+                                    if (hasBluetoothConnectPermission()) {
+                                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, offset, value)
+                                    }
+                                }
+                                return
+                            }
+                            
                             fileOutputStream = createDownloadStream(incomingFileName)
                             val remainingData = buffer.copyOfRange(headerSize, buffer.size)
                             if (remainingData.isNotEmpty() && fileOutputStream != null) {
@@ -815,12 +873,33 @@ fun MainActivity.wifiServer() {
                         .replace(Regex("[^a-zA-Z0-9.\\-_]"), "")
                         .ifEmpty { "wifi_transfer_${System.currentTimeMillis()}" }
                     
-                    createDownloadStream(fileName)?.use { fos ->
-                        inputStream.copyTo(fos)
-                    }
-
+                    val latch = java.util.concurrent.CountDownLatch(1)
+                    var accepted = false
                     Handler(Looper.getMainLooper()).post {
-                        Toast.makeText(this@wifiServer, "Received via WiFi: $fileName", Toast.LENGTH_SHORT).show()
+                        incomingFileRequest.value = fileName
+                        acceptCallback = {
+                            accepted = true
+                            latch.countDown()
+                        }
+                        rejectCallback = {
+                            accepted = false
+                            latch.countDown()
+                        }
+                    }
+                    try { latch.await(30, java.util.concurrent.TimeUnit.SECONDS) } catch(e: Exception) {}
+                    
+                    if (accepted) {
+                        createDownloadStream(fileName)?.use { fos ->
+                            inputStream.copyTo(fos)
+                        }
+                        Handler(Looper.getMainLooper()).post {
+                            Toast.makeText(this@wifiServer, "Received via WiFi: $fileName", Toast.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        Handler(Looper.getMainLooper()).post {
+                            incomingFileRequest.value = null
+                            Toast.makeText(this@wifiServer, "File rejected", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 }
             }

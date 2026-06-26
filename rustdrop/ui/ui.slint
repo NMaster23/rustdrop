@@ -23,6 +23,7 @@ export component AppWindow inherits Window {
     callback send_select_device_blue(string);
     callback disconnect();
     callback file_accept();
+    callback file_reject();
     
     if (!blue_connected_menu && !receiving_file): ScrollView {
         VerticalLayout {
@@ -75,10 +76,20 @@ export component AppWindow inherits Window {
             disconnect();
         }
     }
-    if (receiving_file): Button {
-        text: "Incoming File Please Press the Button to Accept";
-        clicked => {
-            file_accept();
+    if (receiving_file): HorizontalLayout {
+        alignment: center;
+        spacing: 10px;
+        Button {
+            text: "Accept";
+            clicked => {
+                file_accept();
+            }
+        }
+        Button {
+            text: "Reject";
+            clicked => {
+                file_reject();
+            }
         }
     }
 }

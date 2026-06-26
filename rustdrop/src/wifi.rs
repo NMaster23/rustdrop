@@ -53,12 +53,12 @@ fn send_file_wifi(ui_handle: slint::Weak<AppWindow>, ip: String, port: u32, file
     }
 }
 
-async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std::sync::Arc<std::sync::Mutex<bool>>) {
+async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std::sync::Arc<std::sync::Mutex<Option<bool>>>) {
     let listener = async_std::net::TcpListener::bind("0.0.0.0:5200").await.unwrap();
     loop {
         match listener.accept().await {
             Ok((mut socket, addr)) => {
-                *file_accepted.lock().unwrap() = false;
+                *file_accepted.lock().unwrap() = None;
                 let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_receiving_file(true));
                 let mut len_buf = [0u8; 1];
                 let _ = socket.read_exact(&mut len_buf).await;
@@ -70,8 +70,15 @@ async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std
                 let mut filename_decoder = Decoder::new(&mut filename_u8);
                 let _ = filename_decoder.read_to_string(&mut filename);
                 
-                while !*file_accepted.lock().unwrap() {
+                while file_accepted.lock().unwrap().is_none() {
                     async_std::task::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                
+                if let Some(false) = *file_accepted.lock().unwrap() {
+                    let _ = ui_handle.upgrade_in_event_loop(move |ui| {
+                        ui.set_transfer_status("File transfer rejected".into());
+                    });
+                    continue;
                 }
                 
                 let mut save_path = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
@@ -100,7 +107,7 @@ async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std
 }
 
 #[cfg(not(target_os = "android"))]
-pub(crate) async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>, file_accepted: std::sync::Arc<std::sync::Mutex<bool>>) {
+pub(crate) async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>, file_accepted: std::sync::Arc<std::sync::Mutex<Option<bool>>>) {
     let service_type = "_rustdrop._tcp.local.";
     let instance_name = format!("rustdrop.{}", whoami::hostname().unwrap_or_else(|_| "<unknown>".to_string()));
     let host_name = format!("rustdrop.{}.local.", whoami::hostname().unwrap_or_else(|_| "<unknown>".to_string()));
