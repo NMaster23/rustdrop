@@ -19,7 +19,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import com.nmaster23.rustdrop.android.ui.theme.RustdropAndroidTheme
+import com.nmaster23.rustdrop.android.ui.theme.RustDropAndroidTheme
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseData
@@ -251,7 +251,7 @@ class MainActivity : ComponentActivity() {
             gattServerHandling()
         }
         setContent {
-            RustdropAndroidTheme {
+            RustDropAndroidTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     UserInterface(
                         modifier = Modifier.padding(innerPadding),
@@ -610,7 +610,7 @@ fun MainActivity.gattServerHandling() {
                                 isReceivingFile = false
                                 bytesReceived = 0
                                 headerBuffer.reset()
-                                if (responseNeeded) {
+                                if (responseNeeded && device != null) {
                                     if (hasBluetoothConnectPermission()) {
                                         gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, offset, value)
                                     }
@@ -656,7 +656,7 @@ fun MainActivity.gattServerHandling() {
                         stopReceivingUI()
                     }
                 }
-                if (responseNeeded) {
+                if (responseNeeded && device != null) {
                     if (hasBluetoothConnectPermission()) {
                         gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
                     }

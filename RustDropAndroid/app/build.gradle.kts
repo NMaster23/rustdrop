@@ -5,16 +5,12 @@ plugins {
 
 android {
     namespace = "com.nmaster23.rustdrop.android"
-    compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
-    }
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.nmaster23.rustdrop.android"
         minSdk = 33
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 1
         versionName = "1.0"
 
@@ -37,6 +33,7 @@ android {
     buildFeatures {
         compose = true
     }
+    ndkVersion = "30.0.14904198 rc1"
 }
 
 dependencies {
