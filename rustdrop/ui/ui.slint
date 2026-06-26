@@ -1,4 +1,35 @@
-import { Button, VerticalBox, ScrollView } from "std-widgets.slint";
+import { Button, VerticalBox, ScrollView, ProgressIndicator } from "std-widgets.slint";
+
+component DeviceButton {
+    in property <string> base_text;
+    in property <bool> is_blue: false;
+    
+    property <int> state: 0;
+    
+    callback do_click();
+    
+    button := Button {
+        text: root.state == 1 ? "File Sent Successfully" : (root.state == 2 ? "Pairing" : root.base_text);
+        clicked => {
+            if (root.is_blue) {
+                root.state = 2;
+            } else {
+                root.state = 1;
+                timer.running = true;
+            }
+            root.do_click();
+        }
+    }
+    
+    timer := Timer {
+        interval: 2s;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.state = 0;
+        }
+    }
+}
 
 struct WifiDevice {
     name: string,
@@ -18,6 +49,9 @@ export component AppWindow inherits Window {
     in-out property <bool> blue_connected_menu;
     in-out property <bool> receiving_file: false;
     in-out property <string> transfer_status: "";
+    in-out property <float> transfer_progress: 0%;
+    in-out property <bool> show_transfer_message: false;
+    in-out property <string> transfer_message: "";
 
     callback send_select_device_wifi(string);
     callback send_select_device_blue(string);
@@ -25,7 +59,7 @@ export component AppWindow inherits Window {
     callback file_accept();
     callback file_reject();
     
-    if (!blue_connected_menu && !receiving_file): ScrollView {
+    if (!blue_connected_menu && !receiving_file && !show_transfer_message): ScrollView {
         VerticalLayout {
             alignment: start;
             spacing: 10px;
@@ -39,11 +73,11 @@ export component AppWindow inherits Window {
 
             VerticalLayout {
                 spacing: 5px;
-                for device[i] in wifi_devices: Button {
+                for device[i] in wifi_devices: DeviceButton {
                     height: 40px;
-                    text: device.name + " (" + device.ip + ") ";
-                    clicked => {
-                        self.text = "File Sent Successfully";
+                    base_text: device.name + " (" + device.ip + ") ";
+                    is_blue: false;
+                    do_click => {
                         send_select_device_wifi(device.ip);
                     }
                 }
@@ -57,11 +91,11 @@ export component AppWindow inherits Window {
 
             VerticalLayout {
                 spacing: 5px;
-                for device[i] in blue_devices: Button {
+                for device[i] in blue_devices: DeviceButton {
                     height: 40px;
-                    text: device.identifier;
-                    clicked => {
-                        self.text = "Pairing";
+                    base_text: device.identifier;
+                    is_blue: true;
+                    do_click => {
                         send_select_device_blue(device.identifier);
                         blue_connected_menu = true;
                     }
@@ -76,23 +110,58 @@ export component AppWindow inherits Window {
             disconnect();
         }
     }
-    if (receiving_file): VerticalLayout {
+    if (receiving_file && !show_transfer_message): VerticalLayout {
         alignment: center;
-        spacing: 10px;
-        Button {
-            primary: true;
-            height: 50px;
-            text: "Accept";
-            clicked => {
-                file_accept();
+        spacing: 20px;
+        padding: 30px;
+
+        if (transfer_progress > 0 && transfer_progress < 1.0): VerticalLayout {
+            spacing: 15px;
+            Text {
+                text: "Receiving file...";
+                font-size: 18px;
+                font-weight: 600;
+                horizontal-alignment: center;
+            }
+            ProgressIndicator {
+                width: 100%;
+                height: 20px;
+                progress: transfer_progress;
+            }
+            Text {
+                text: Math.round(transfer_progress * 100) + "%";
+                font-size: 14px;
+                font-weight: 500;
+                horizontal-alignment: center;
             }
         }
-        Button {
-            height: 50px;
-            text: "Reject";
-            clicked => {
-                file_reject();
+
+        HorizontalLayout {
+            alignment: center;
+            spacing: 20px;
+            Button {
+                primary: true;
+                height: 50px;
+                width: 100px;
+                text: "Accept";
+                clicked => { file_accept(); }
             }
+            Button {
+                height: 50px;
+                width: 100px;
+                text: "Reject";
+                clicked => { file_reject(); }
+            }
+        }
+    }
+    if (show_transfer_message): VerticalLayout {
+        alignment: center;
+        spacing: 20px;
+        padding: 20px;
+        Text {
+            text: transfer_message;
+            font-size: 14px;
+            wrap: word-wrap;
         }
     }
 }

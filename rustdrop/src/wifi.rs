@@ -57,9 +57,12 @@ async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std
     let listener = async_std::net::TcpListener::bind("0.0.0.0:5200").await.unwrap();
     loop {
         match listener.accept().await {
-            Ok((mut socket, addr)) => {
+            Ok((mut socket, _addr)) => {
                 *file_accepted.lock().unwrap() = None;
-                let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_receiving_file(true));
+                let _ = ui_handle.upgrade_in_event_loop(|ui| {
+                    ui.set_receiving_file(true);
+                    ui.set_transfer_progress(0.05);
+                });
                 let mut len_buf = [0u8; 1];
                 let _ = socket.read_exact(&mut len_buf).await;
                 let len = len_buf[0] as usize;
@@ -76,7 +79,8 @@ async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std
                 
                 if let Some(false) = *file_accepted.lock().unwrap() {
                     let _ = ui_handle.upgrade_in_event_loop(move |ui| {
-                        ui.set_transfer_status("File transfer rejected".into());
+                        ui.set_transfer_message("File transfer rejected".into());
+                        ui.set_show_transfer_message(true);
                     });
                     continue;
                 }
@@ -84,19 +88,37 @@ async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std
                 let mut save_path = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
                 save_path.push(&filename);
                 let mut file = async_std::fs::File::create(&save_path).await.unwrap();
-                match async_std::io::copy(&mut socket, &mut file).await {
+                let start_time = std::time::Instant::now();
+                let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_progress(0.5));
+                
+                let result = async_std::io::copy(&mut socket, &mut file).await;
+                
+                let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_progress(1.0));
+                
+                let elapsed = start_time.elapsed().as_secs_f32();
+                if elapsed < 1.0 {
+                    async_std::task::sleep(std::time::Duration::from_secs_f32(1.0 - elapsed)).await;
+                }
+                
+                let message = match result {
                     Ok(bytes) => {
-                        let status = format!("Received {} bytes and saved to {:?}", bytes, save_path);
-                        let _ = ui_handle.upgrade_in_event_loop(move |ui| {
-                            ui.set_transfer_status(status.clone().into());
-                            ui.set_receiving_file(false);
-                        });
+                        format!("Received {} bytes and saved to {:?}", bytes, save_path)
                     },
                     Err(e) => {
-                        let error_msg = format!("Error during reception: {}", e);
-                        let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(error_msg.into()));
+                        format!("Error during reception: {}", e)
                     }
-                }
+                };
+                
+                let _ = ui_handle.upgrade_in_event_loop(move |ui| {
+                    ui.set_transfer_message(message.clone().into());
+                    ui.set_show_transfer_message(true);
+                });
+                
+                let _ = ui_handle.upgrade_in_event_loop(|ui| {
+                    ui.set_receiving_file(false);
+                    ui.set_transfer_progress(0.0);
+                    ui.set_show_transfer_message(false);
+                });
             }
             Err(e) => {
                 let error_msg = format!("Connection error: {e:?}");

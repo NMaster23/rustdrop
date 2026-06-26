@@ -140,7 +140,7 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
     let (sender_tx, mut receiver_rx) = channel::<PeripheralEvent>(256);
     let mut peripheral = Peripheral::new(sender_tx).await.unwrap();
     while !peripheral.is_powered().await.unwrap() {}
-    peripheral.add_service(
+    let _ = peripheral.add_service(
         &Service {
             uuid: TARGET_SERVICE,
             primary: true,
@@ -153,7 +153,7 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
             ],
         }
     ).await;
-    peripheral.start_advertising("RustDrop", &[TARGET_SERVICE]).await;
+    let _ = peripheral.start_advertising("RustDrop", &[TARGET_SERVICE]).await;
     let mut received_data = Vec::new();
     let mut is_receiving = false;
     loop {
@@ -165,7 +165,10 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
 
                         if !is_receiving {
                             *file_accepted.lock().unwrap() = None;
-                            let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_receiving_file(true));
+                            let _ = ui_handle.upgrade_in_event_loop(|ui| {
+                                ui.set_receiving_file(true);
+                                ui.set_transfer_progress(0.05);
+                            });
                             is_receiving = true;
                         }
                         
@@ -177,6 +180,12 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                             let name_len = received_data[8] as usize;
                             let header_size = 9 + name_len;
                             let total_expected_size = header_size + expected_file_size;
+                            let received_so_far = received_data.len() as f32;
+                            let total_size = total_expected_size as f32;
+                            let progress = (received_so_far / total_size).min(0.99);
+                            let _ = ui_handle.upgrade_in_event_loop(move |ui| {
+                                ui.set_transfer_progress(progress);
+                            });
                             if received_data.len() >= total_expected_size {
                                 let mut filename = String::from_utf8_lossy(&received_data[9..9 + name_len]).to_string();
                                 filename = filename.chars().filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_').collect();
@@ -189,26 +198,40 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                                 
                                 let file_msg = format!("Received file {} with {} bytes. Saving to {:?}", filename, file_data.len(), save_path);
                                 let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(file_msg.clone().into()));
+                                let start_time = std::time::Instant::now();
                                 let mut waiting = 0;
                                 while file_accepted.lock().unwrap().is_none() && waiting < 300 {
                                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                                     waiting += 1;
                                 }
                                 
-                                if let Some(true) = *file_accepted.lock().unwrap() {
+                                let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_progress(1.0));
+                                
+                                let elapsed = start_time.elapsed().as_secs_f32();
+                                if elapsed < 1.0 {
+                                    tokio::time::sleep(std::time::Duration::from_secs_f32(1.0 - elapsed)).await;
+                                }
+                                
+                                let message = if let Some(true) = *file_accepted.lock().unwrap() {
                                     if let Err(e) = std::fs::write(&save_path, file_data) {
-                                        let err_msg = format!("Error saving file: {}", e);
-                                        let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(err_msg.clone().into()));
+                                        format!("Error saving file: {}", e)
                                     } else {
-                                        let save_msg = format!("File saved successfully to {:?}", save_path);
-                                        let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(save_msg.clone().into()));
+                                        format!("File saved successfully to {:?}", save_path)
                                     }
                                 } else {
-                                    let _ = ui_handle.upgrade_in_event_loop(move |ui| {
-                                        ui.set_transfer_status("File transfer rejected or timed out".into());
-                                    });
-                                }
-                                let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_receiving_file(false));
+                                    "File transfer rejected or timed out".to_string()
+                                };
+                                
+                                let _ = ui_handle.upgrade_in_event_loop(move |ui| {
+                                    ui.set_transfer_message(message.clone().into());
+                                    ui.set_show_transfer_message(true);
+                                });
+                                
+                                let _ = ui_handle.upgrade_in_event_loop(|ui| {
+                                    ui.set_receiving_file(false);
+                                    ui.set_transfer_progress(0.0);
+                                    ui.set_show_transfer_message(false);
+                                });
                                 is_receiving = false;
                                 received_data.clear();
                             }
@@ -323,7 +346,7 @@ pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
                         continue;
                     }
                     let blue_data = BlueData {
-                        identifier: format!("{} ({:?})", discovered_device.device.name().as_deref().unwrap_or("(unknown)"), discovered_device.device.id()),
+                        identifier: format!("{}", discovered_device.device.name().as_deref().unwrap_or("(unknown)")),
                         signal_strength: discovered_device.rssi.map(|x| format!(" ({}dBm)", x)).unwrap_or_default(),
                         service_uuid: discovered_device.adv_data.services
                     };

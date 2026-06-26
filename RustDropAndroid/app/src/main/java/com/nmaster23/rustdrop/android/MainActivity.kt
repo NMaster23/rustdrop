@@ -13,6 +13,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -108,6 +109,38 @@ class MainActivity : ComponentActivity() {
     val incomingFileRequest = androidx.compose.runtime.mutableStateOf<String?>(null)
     var acceptCallback: (() -> Unit)? = null
     var rejectCallback: (() -> Unit)? = null
+
+    val isReceivingDialogVisible = androidx.compose.runtime.mutableStateOf(false)
+    val receivingProgress = androidx.compose.runtime.mutableStateOf<Float?>(null)
+    var receivingStartTime = 0L
+
+    fun startReceivingUI(isDeterminate: Boolean) {
+        Handler(Looper.getMainLooper()).post {
+            receivingStartTime = System.currentTimeMillis()
+            receivingProgress.value = if (isDeterminate) 0f else null
+            isReceivingDialogVisible.value = true
+        }
+    }
+
+    fun updateReceivingUI(progress: Float) {
+        Handler(Looper.getMainLooper()).post {
+            receivingProgress.value = progress
+        }
+    }
+
+    fun stopReceivingUI() {
+        val duration = System.currentTimeMillis() - receivingStartTime
+        val delay = if (duration < 1000L) 1000L - duration else 0L
+        Handler(Looper.getMainLooper()).post {
+            if (receivingProgress.value != null) {
+                receivingProgress.value = 1f
+            }
+        }
+        Handler(Looper.getMainLooper()).postDelayed({
+            isReceivingDialogVisible.value = false
+        }, delay)
+    }
+
     val filePickerLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@registerForActivityResult
         if (selectedDeviceForSending != null) {
@@ -259,6 +292,27 @@ class MainActivity : ComponentActivity() {
                                     incomingFileRequest.value = null
                                 }) { Text("Reject") }
                             }
+                        )
+                    }
+
+                    if (isReceivingDialogVisible.value) {
+                        androidx.compose.material3.AlertDialog(
+                            onDismissRequest = { },
+                            title = { Text("Receiving File...") },
+                            text = {
+                                androidx.compose.foundation.layout.Box(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    contentAlignment = androidx.compose.ui.Alignment.Center
+                                ) {
+                                    val progress = receivingProgress.value
+                                    if (progress != null) {
+                                        androidx.compose.material3.LinearProgressIndicator(progress = progress)
+                                    } else {
+                                        androidx.compose.material3.LinearProgressIndicator()
+                                    }
+                                }
+                            },
+                            confirmButton = {}
                         )
                     }
                 }
@@ -481,6 +535,7 @@ fun MainActivity.gattServerHandling() {
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.i("GattServer", "Device disconnected: $deviceName")
+                    if (isReceivingFile) stopReceivingUI()
                     isReceivingFile = false
                     bytesReceived = 0
                     headerBuffer.reset()
@@ -565,9 +620,11 @@ fun MainActivity.gattServerHandling() {
                             
                             fileOutputStream = createDownloadStream(incomingFileName)
                             val remainingData = buffer.copyOfRange(headerSize, buffer.size)
+                            startReceivingUI(true)
                             if (remainingData.isNotEmpty() && fileOutputStream != null) {
                                 fileOutputStream!!.write(remainingData)
                                 bytesReceived += remainingData.size
+                                updateReceivingUI(bytesReceived.toFloat() / fileSize.toFloat())
                             }
                             headerBuffer.reset()
                             isReceivingFile = true
@@ -581,12 +638,14 @@ fun MainActivity.gattServerHandling() {
                                 isReceivingFile = false
                                 bytesReceived = 0
                                 Log.i("GattServer", "File saved to Downloads: $incomingFileName")
+                                stopReceivingUI()
                             }
                         }
                     }
                 } else {
                     fileOutputStream?.write(value)
                     bytesReceived += value.size
+                    updateReceivingUI(bytesReceived.toFloat() / fileSize.toFloat())
                     if (bytesReceived >= fileSize) {
                         fileOutputStream?.flush()
                         fileOutputStream?.close()
@@ -594,6 +653,7 @@ fun MainActivity.gattServerHandling() {
                         bytesReceived = 0
                         headerBuffer.reset()
                         Log.i("GattServer", "File saved to Downloads: $incomingFileName")
+                        stopReceivingUI()
                     }
                 }
                 if (responseNeeded) {
@@ -889,12 +949,14 @@ fun MainActivity.wifiServer() {
                     try { latch.await(30, java.util.concurrent.TimeUnit.SECONDS) } catch(e: Exception) {}
                     
                     if (accepted) {
+                        startReceivingUI(false)
                         createDownloadStream(fileName)?.use { fos ->
                             inputStream.copyTo(fos)
                         }
                         Handler(Looper.getMainLooper()).post {
                             Toast.makeText(this@wifiServer, "Received via WiFi: $fileName", Toast.LENGTH_SHORT).show()
                         }
+                        stopReceivingUI()
                     } else {
                         Handler(Looper.getMainLooper()).post {
                             incomingFileRequest.value = null
