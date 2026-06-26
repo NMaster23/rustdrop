@@ -41,34 +41,38 @@ const TARGET_SERVICE: Uuid = Uuid::from_u128(0x00001825_0000_1000_8000_00805F9B3
 use slint::{SharedString, Model};
 
 #[cfg(not(target_os = "android"))]
-async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str) -> bool {
+async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str, ui_handle: slint::Weak<AppWindow>) -> bool {
     let mut service_char = None;
     for attempt in 1..=5 {
-        println!("Service discovery attempt {}/5...", attempt);
+        let msg = format!("Service discovery attempt {}/5...", attempt);
+        let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(msg.clone().into()));
         let services = match timeout(Duration::from_secs(20), device.discover_services()).await {
             Ok(Ok(s)) if !s.is_empty() => {
-                println!("Found {} services", s.len());
+                let msg = format!("Found {} services", s.len());
+                let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(msg.clone().into()));
                 for service in &s {
-                    println!("Discovered service UUID: {}", service.uuid());
+                    let uuid_msg = format!("Discovered service UUID: {}", service.uuid());
+                    let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(uuid_msg.clone().into()));
                 }
                 s
             }
             Ok(Ok(_)) => {
-                println!("No services found (empty cache). Retrying...");
+                let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("No services found (empty cache). Retrying...".into()));
                 let _ = adapter.disconnect_device(device).await;
                 async_std::task::sleep(Duration::from_secs(1)).await;
                 let _ = adapter.connect_device(device).await;
                 continue;
             }
             Ok(Err(e)) => {
-                println!("Service discovery error: {}. Retrying...", e);
+                let error_msg = format!("Service discovery error: {}. Retrying...", e);
+                let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(error_msg.clone().into()));
                 let _ = adapter.disconnect_device(device).await;
                 async_std::task::sleep(Duration::from_secs(1)).await;
                 let _ = adapter.connect_device(device).await;
                 continue;
             }
             Err(_) => {
-                println!("Service discovery timed out. Retrying...");
+                let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("Service discovery timed out. Retrying...".into()));
                 if attempt >= 3 {
                     let _ = adapter.disconnect_device(device).await;
                     async_std::task::sleep(Duration::from_secs(1)).await;
@@ -79,14 +83,18 @@ async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str) -> 
         };
         for service in services {
             if service.uuid() == TARGET_SERVICE {
-                println!("Found TARGET_SERVICE!");
+                let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("Found TARGET_SERVICE!".into()));
                 let characteristics = match service.discover_characteristics().await {
                     Ok(c) => c,
-                    Err(e) => { println!("Characteristic discovery failed: {}", e); continue; }
+                    Err(e) => {
+                        let err_msg = format!("Characteristic discovery failed: {}", e);
+                        let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(err_msg.clone().into()));
+                        continue;
+                    }
                 };
                 for characteristic in characteristics {
                     if characteristic.uuid() == TARGET_CHAR {
-                        println!("Found TARGET_CHAR!");
+                        let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("Found TARGET_CHAR!".into()));
                         service_char = Some(characteristic);
                         break;
                     }
@@ -96,7 +104,7 @@ async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str) -> 
         if service_char.is_some() {
             break;
         }
-        println!("TARGET_CHAR not found in services. Retrying...");
+        let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("TARGET_CHAR not found in services. Retrying...".into()));
         let _ = adapter.disconnect_device(device).await;
         async_std::task::sleep(Duration::from_secs(2)).await;
         let _ = adapter.connect_device(device).await;
@@ -113,15 +121,16 @@ async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str) -> 
     if let Some(write_char) = service_char {
         for chunk in to_send.chunks(20) {
             if let Err(e) = write_char.write(chunk).await {
-                println!("Error Sending Chunk: {}", e);
+                let err_msg = format!("Error Sending Chunk: {}", e);
+                let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(err_msg.clone().into()));
                 return false;
             }
             async_std::task::sleep(Duration::from_millis(10)).await;
         }
-        println!("file sent");
+        let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("File sent successfully".into()));
         true
     } else {
-        println!("TARGET_CHAR not found on device");
+        let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("TARGET_CHAR not found on device".into()));
         false
     }
 }
@@ -178,7 +187,8 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                                 let mut save_path = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
                                 save_path.push(&filename);
                                 
-                                println!("Received file {} with {} bytes. Saving to {:?}", filename, file_data.len(), save_path);
+                                let file_msg = format!("Received file {} with {} bytes. Saving to {:?}", filename, file_data.len(), save_path);
+                                let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(file_msg.clone().into()));
                                 let mut waiting = 0;
                                 while !*file_accepted.lock().unwrap() && waiting < 300 {
                                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -186,9 +196,11 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                                 }
                                 
                                 if let Err(e) = std::fs::write(&save_path, file_data) {
-                                    println!("Error saving file: {}", e);
+                                    let err_msg = format!("Error saving file: {}", e);
+                                    let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(err_msg.clone().into()));
                                 } else {
-                                    println!("File saved successfully to {:?}", save_path);
+                                    let save_msg = format!("File saved successfully to {:?}", save_path);
+                                    let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(save_msg.clone().into()));
                                 }
                                 let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_receiving_file(false));
                                 is_receiving = false;
@@ -200,7 +212,7 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                 }
             },
             None => {
-                println!("Channel closed.");
+                let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("Channel closed".into()));
                 is_receiving = false;
                 received_data.clear();
                 break;
@@ -216,12 +228,12 @@ pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
     let adapter_disconnect = Arc::clone(&adapter);
     let adapter_timeout = adapter.wait_available();
     if let Err(_) = timeout(Duration::from_secs(1), adapter_timeout).await {
-        println!("Please check whether your device supports Bluetooth, or if your Bluetooth is turned off.");
+        let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("Please check whether your device supports Bluetooth, or if your Bluetooth is turned off.".into()));
         return;
     }
-    println!("starting scan");
+    let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("Starting Bluetooth scan...".into()));
     let mut scan = adapter.scan(&[TARGET_SERVICE]).await.unwrap();
-    println!("scan started");
+    let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("Scan started".into()));
     let is_scanning = Arc::new(Mutex::new(true));
     let is_scanning_stop = Arc::clone(&is_scanning);
     let is_scanning_start = Arc::clone(&is_scanning);
@@ -231,12 +243,15 @@ pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
     let ui_handle_request = ui_handle.clone();
     let active_session = Arc::new(Mutex::new(None));
     let disconnect_session = Arc::clone(&active_session);
+    let ui_handle_for_callbacks = ui_handle_request.clone();
+    let ui_handle_for_disconnect = ui_handle.clone();
     let _ = ui_handle_request.upgrade_in_event_loop(move |ui| {
         let identifier_name = Arc::clone(&identifier_name);
         ui.on_send_select_device_blue(move |identifier: SharedString| {
             let adapter_connect = Arc::clone(&adapter_ui);
             let identifier_name = Arc::clone(&identifier_name);
             let active_session_clone = Arc::clone(&active_session);
+            let ui_handle_spawn = ui_handle_for_callbacks.clone();
             *is_scanning_stop.lock().unwrap() = false;
             async_std::task::spawn(async move {
                 let file = FileDialog::new()
@@ -247,24 +262,30 @@ pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
                 let device_file = device.clone();
                 if let Some(path) = file {
                     let path_str = path.to_string_lossy().into_owned();
-                    println!("{}", path_str);
-                    // Wait 1 second to guarantee the background scanner has fully shut down and released the Windows BLE radio!
+                    let path_str_clone = path_str.clone();
+                    let _ = ui_handle_spawn.upgrade_in_event_loop(move |ui| ui.set_transfer_status(format!("Selected file: {}", path_str_clone).into()));
                     async_std::task::sleep(Duration::from_secs(1)).await;
                     match timeout(Duration::from_secs(10), adapter_connect.connect_device(&device_file)).await {
                         Ok(Ok(_)) => {
-                            println!("Connected to {}", identifier.to_string());
+                            let identifier_msg = identifier.to_string();
+                            let _ = ui_handle_spawn.upgrade_in_event_loop(move |ui| ui.set_transfer_status(format!("Connected to {}", identifier_msg).into()));
                             *active_session_clone.lock().unwrap() = Some(device);
                             async_std::task::sleep(Duration::from_secs(1)).await;
-                            println!("About to send file");
-                            let success = send_file_blue(&adapter_connect, &device_file, &path_str).await;
+                            let _ = ui_handle_spawn.upgrade_in_event_loop(|ui| ui.set_transfer_status("About to send file".into()));
+                            let success = send_file_blue(&adapter_connect, &device_file, &path_str, ui_handle_spawn.clone()).await;
                             if success {
-                                println!("Sent file successfully");
+                                let _ = ui_handle_spawn.upgrade_in_event_loop(|ui| ui.set_transfer_status("Sent file successfully".into()));
                             } else {
-                                println!("Failed to send file");
+                                let _ = ui_handle_spawn.upgrade_in_event_loop(|ui| ui.set_transfer_status("Failed to send file".into()));
                             }
                         }
-                        Ok(Err(e)) => { println!("Connect error: {}", e); }
-                        Err(_) => { println!("Connect timed out"); }
+                        Ok(Err(e)) => {
+                            let err_msg = format!("Connect error: {}", e);
+                            let _ = ui_handle_spawn.upgrade_in_event_loop(move |ui| ui.set_transfer_status(err_msg.clone().into()));
+                        }
+                        Err(_) => {
+                            let _ = ui_handle_spawn.upgrade_in_event_loop(|ui| ui.set_transfer_status("Connect timed out".into()));
+                        }
                     }
                 }
             });
@@ -274,19 +295,20 @@ pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
                 let device = session.clone();
                 let adapter_async = Arc::clone(&adapter_disconnect);
                 let is_scanning_start = Arc::clone(&is_scanning_start);
+                let ui_handle_disconnect_inner = ui_handle_for_disconnect.clone();
                 async_std::task::spawn(async move {
                     adapter_async.disconnect_device(&device).await.unwrap();
-                    println!("Disconnected");
+                    let _ = ui_handle_disconnect_inner.upgrade_in_event_loop(|ui| ui.set_transfer_status("Disconnected".into()));
                     *is_scanning_start.lock().unwrap() = true;
                 });
             }
         });
     });
     if *is_scanning.lock().unwrap() {
-        println!("Scan started");
+        let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("Scan started".into()));
         loop {
             if !*is_scanning.lock().unwrap() {
-                println!("Scan stopped");
+                let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("Scan stopped".into()));
                 break;
             }
             match timeout(Duration::from_millis(500), scan.next()).await {

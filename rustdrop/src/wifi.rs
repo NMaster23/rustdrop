@@ -3,7 +3,7 @@ use crate::{AppWindow, WifiDevice};
 
 use mdns_sd::{ServiceDaemon, ServiceInfo, ServiceEvent};
 use local_ip_address::local_ip;
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpStream;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::rc::Rc;
@@ -15,14 +15,14 @@ use chunked_transfer::{Encoder, Decoder};
 #[cfg(not(target_os = "android"))]
 use slint::{SharedString, Model};
 
-fn send_file_wifi(ip: String, port: u32, file_path: &str) {
+fn send_file_wifi(ui_handle: slint::Weak<AppWindow>, ip: String, port: u32, file_path: &str) {
     let addr = if ip.contains(':') {
         format!("[{}]:{}", ip, port)
     } else {
         format!("{}:{}", ip, port)
     };
     if let Ok(mut stream) = TcpStream::connect(&addr) {
-        println!("Connected to the server!");
+        let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("Connected to the server!".into()));
         if let Ok(mut file) = File::open(file_path) {
             let decoded = std::path::Path::new(file_path).file_name().and_then(|name| name.to_str()).unwrap_or("unknown_file").as_bytes();
             let mut encoded: Vec<u8> = vec![];
@@ -34,16 +34,22 @@ fn send_file_wifi(ip: String, port: u32, file_path: &str) {
             stream.write_all(&encoded).unwrap();
             match io::copy(&mut file, &mut stream) {
                 Ok(bytes) => {
-                    println!("Sent {} bytes successfully", bytes); 
+                    let status = format!("Sent {} bytes successfully", bytes);
+                    let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(status.clone().into()));
                     let _ = stream.shutdown(std::net::Shutdown::Both);
                 }
-                Err(e) => println!("Failed to send file: {}", e),
+                Err(e) => {
+                    let error_msg = format!("Failed to send file: {}", e);
+                    let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(error_msg.into()));
+                }
             }
         } else {
-            println!("Could not open file: {}", file_path);
+            let error_msg = format!("Could not open file: {}", file_path);
+            let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(error_msg.into()));
         };
     } else {
-        println!("Couldn't connect to server at {}", &addr);
+        let error_msg = format!("Couldn't connect to server at {}", &addr);
+        let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(error_msg.into()));
     }
 }
 
@@ -73,13 +79,22 @@ async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std
                 let mut file = async_std::fs::File::create(&save_path).await.unwrap();
                 match async_std::io::copy(&mut socket, &mut file).await {
                     Ok(bytes) => {
-                        println!("Received {} bytes and saved to {:?}", bytes, save_path);
-                        let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_receiving_file(false));
+                        let status = format!("Received {} bytes and saved to {:?}", bytes, save_path);
+                        let _ = ui_handle.upgrade_in_event_loop(move |ui| {
+                            ui.set_transfer_status(status.clone().into());
+                            ui.set_receiving_file(false);
+                        });
                     },
-                    Err(e) => println!("Error during reception: {}", e),
+                    Err(e) => {
+                        let error_msg = format!("Error during reception: {}", e);
+                        let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(error_msg.into()));
+                    }
                 }
             }
-            Err(e) => println!("Connection error: {e:?}"),
+            Err(e) => {
+                let error_msg = format!("Connection error: {e:?}");
+                let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(error_msg.into()));
+            }
         }
     }
 }
@@ -100,8 +115,10 @@ pub(crate) async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>,
         port,
         None,
     ).unwrap();
-    println!("{}", host_name);
+    let host_name_clone = host_name.clone();
+    let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(format!("Hostname: {}", host_name_clone).into()));
     mdns.register(rustdrop_service).expect("Failed to register our service");
+    let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(format!("Service registered: {}", host_name).into()));
     let ui_handle_recv = ui_handle.clone();
     async_std::task::spawn(async move {
         receive_file_wifi(ui_handle_recv, file_accepted).await;
@@ -110,7 +127,8 @@ pub(crate) async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>,
     async_std::task::spawn(async move {
         while let Ok(event) = receiver.recv() {
             if let ServiceEvent::ServiceResolved(resolved) = event {
-                println!("Resolved a new service: {}", resolved.fullname);
+                let status = format!("Resolved a new service: {}", resolved.fullname);
+                let _ = ui_handle_clone.upgrade_in_event_loop(move |ui| ui.set_transfer_status(status.clone().into()));
                 let name = resolved.get_hostname().to_string();
                 let ip = resolved.get_addresses().iter().find(|a| a.is_ipv4()).or_else(|| resolved.get_addresses().iter().next()).map(|a| a.to_string()).unwrap_or_default();
                 ui_handle_clone.upgrade_in_event_loop(move |ui| {
@@ -132,7 +150,7 @@ pub(crate) async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>,
                 .pick_file();
             if let Some(path) = file {
                 let path_str = path.to_string_lossy().into_owned();
-                send_file_wifi(device_ip.to_string(), 5200, &path_str);
+                send_file_wifi(ui_handle_request.clone(), device_ip.to_string(), 5200, &path_str);
             }
         });
     });

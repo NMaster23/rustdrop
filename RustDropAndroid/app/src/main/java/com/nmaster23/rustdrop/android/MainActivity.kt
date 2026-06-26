@@ -101,7 +101,7 @@ class MainActivity : ComponentActivity() {
     var bleSendingOffset = 0L
     var bleInputStream: java.io.InputStream? = null
     var targetCharacteristic: BluetoothGattCharacteristic? = null
-    var currentOutputFile: File? = null
+    var currentOutputUri: android.net.Uri? = null
     var lastChunkSize = 0
     var negotiatedMtu = 23
     var selectedWifiDevice: String? = null
@@ -429,7 +429,7 @@ fun MainActivity.gattServerHandling() {
     var bytesReceived: Long = 0
     var incomingFileName = ""
     val headerBuffer = ByteArrayOutputStream()
-    var fileOutputStream: FileOutputStream? = null
+    var fileOutputStream: java.io.OutputStream? = null
     val bluetoothManager = getSystemService(BluetoothManager::class.java)
     val gattServerCallback = object : android.bluetooth.BluetoothGattServerCallback() {
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
@@ -505,13 +505,9 @@ fun MainActivity.gattServerHandling() {
                             if (incomingFileName.isEmpty()) {
                                 incomingFileName = "RustDrop_File_Error"
                             }
-                            val downloadDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: cacheDir
-                            if (downloadDir != null && !downloadDir.exists()) downloadDir.mkdirs()
-                            val outputFile = File(downloadDir, incomingFileName)
-                            currentOutputFile = outputFile
-                            fileOutputStream = FileOutputStream(outputFile)
+                            fileOutputStream = createDownloadStream(incomingFileName)
                             val remainingData = buffer.copyOfRange(headerSize, buffer.size)
-                            if (remainingData.isNotEmpty()) {
+                            if (remainingData.isNotEmpty() && fileOutputStream != null) {
                                 fileOutputStream!!.write(remainingData)
                                 bytesReceived += remainingData.size
                             }
@@ -526,10 +522,7 @@ fun MainActivity.gattServerHandling() {
                                 fileOutputStream!!.close()
                                 isReceivingFile = false
                                 bytesReceived = 0
-                                outputFile.let { file ->
-                                    MediaScannerConnection.scanFile(this@gattServerHandling, arrayOf(file.absolutePath), null, null)
-                                    Log.i("GattServer", "File saved and scanned: ${file.absolutePath}")
-                                }
+                                Log.i("GattServer", "File saved to Downloads: $incomingFileName")
                             }
                         }
                     }
@@ -542,10 +535,7 @@ fun MainActivity.gattServerHandling() {
                         isReceivingFile = false
                         bytesReceived = 0
                         headerBuffer.reset()
-                        currentOutputFile?.let { file ->
-                            MediaScannerConnection.scanFile(this@gattServerHandling, arrayOf(file.absolutePath), null, null)
-                            Log.i("GattServer", "File saved and scanned: ${file.absolutePath}")
-                        }
+                        Log.i("GattServer", "File saved to Downloads: $incomingFileName")
                     }
                 }
                 if (responseNeeded) {
@@ -824,14 +814,11 @@ fun MainActivity.wifiServer() {
                     val fileName = rawName.substringAfter("\r\n").substringBefore("\r\n")
                         .replace(Regex("[^a-zA-Z0-9.\\-_]"), "")
                         .ifEmpty { "wifi_transfer_${System.currentTimeMillis()}" }
-                    val downloadDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: cacheDir
-                    val outputFile = File(downloadDir, fileName)
                     
-                    FileOutputStream(outputFile).use { fos ->
+                    createDownloadStream(fileName)?.use { fos ->
                         inputStream.copyTo(fos)
                     }
 
-                    MediaScannerConnection.scanFile(this@wifiServer, arrayOf(outputFile.absolutePath), null, null)
                     Handler(Looper.getMainLooper()).post {
                         Toast.makeText(this@wifiServer, "Received via WiFi: $fileName", Toast.LENGTH_SHORT).show()
                     }
@@ -868,4 +855,9 @@ fun MainActivity.sendFileWifi(ip: String, uri: Uri) {
             }
         }
     }.start()
+}
+
+fun android.content.Context.createDownloadStream(fileName: String): java.io.OutputStream? {
+    val uri = contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, android.content.ContentValues().apply { put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, fileName) })
+    return uri?.let { contentResolver.openOutputStream(it) }
 }
