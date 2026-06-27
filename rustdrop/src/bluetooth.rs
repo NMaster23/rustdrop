@@ -153,7 +153,8 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
             ],
         }
     ).await;
-    let _ = peripheral.start_advertising("RustDrop", &[TARGET_SERVICE]).await;
+    let host_name = whoami::hostname().unwrap_or_else(|_| "RustDrop".to_string());
+    let _ = peripheral.start_advertising(&host_name, &[TARGET_SERVICE]).await;
     let mut received_data = Vec::new();
     let mut is_receiving = false;
     loop {
@@ -166,6 +167,7 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                         if !is_receiving {
                             *file_accepted.lock().unwrap() = None;
                             let _ = ui_handle.upgrade_in_event_loop(|ui| {
+                                ui.set_transfer_decision_made(false);
                                 ui.set_receiving_file(true);
                                 ui.set_transfer_progress(0.05);
                             });

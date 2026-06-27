@@ -52,6 +52,7 @@ export component AppWindow inherits Window {
     in-out property <float> transfer_progress: 0%;
     in-out property <bool> show_transfer_message: false;
     in-out property <string> transfer_message: "";
+    in-out property <bool> transfer_decision_made: false;
 
     callback send_select_device_wifi(string);
     callback send_select_device_blue(string);
@@ -136,7 +137,7 @@ export component AppWindow inherits Window {
             }
         }
 
-        HorizontalLayout {
+        if (!transfer_decision_made): HorizontalLayout {
             alignment: center;
             spacing: 20px;
             Button {
@@ -144,13 +145,27 @@ export component AppWindow inherits Window {
                 height: 50px;
                 width: 100px;
                 text: "Accept";
-                clicked => { file_accept(); }
+                clicked => {
+                    transfer_decision_made = true;
+                    file_accept();
+                }
             }
             Button {
                 height: 50px;
                 width: 100px;
                 text: "Reject";
-                clicked => { file_reject(); }
+                clicked => {
+                    transfer_decision_made = true;
+                    file_reject();
+                }
+            }
+        }
+        if (transfer_decision_made && transfer_progress < 1.0): HorizontalLayout {
+            alignment: center;
+            Text {
+                text: "Transfer in progress...";
+                font-size: 14px;
+                color: gray;
             }
         }
     }

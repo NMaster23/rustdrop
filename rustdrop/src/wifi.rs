@@ -60,6 +60,7 @@ async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std
             Ok((mut socket, _addr)) => {
                 *file_accepted.lock().unwrap() = None;
                 let _ = ui_handle.upgrade_in_event_loop(|ui| {
+                    ui.set_transfer_decision_made(false);
                     ui.set_receiving_file(true);
                     ui.set_transfer_progress(0.05);
                 });
