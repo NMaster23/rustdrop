@@ -3,14 +3,14 @@ use crate::{AppWindow, BlueDevice};
 #[cfg(target_os = "android")]
 use crate::RustDropUiCallback;
 
-use async_std::stream::StreamExt;
+use futures_util::stream::StreamExt;
 use bluest::*;
 use std::rc::Rc;
 #[cfg(not(target_os = "android"))]
 use rfd::FileDialog;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use async_std::future::timeout;
+use tokio::time::timeout;
 use std::time::Duration;
 #[cfg(not(target_os = "android"))]
 use ble_peripheral_rust::{
@@ -59,7 +59,7 @@ async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str, ui_
             Ok(Ok(_)) => {
                 let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("No services found (empty cache). Retrying...".into()));
                 let _ = adapter.disconnect_device(device).await;
-                async_std::task::sleep(Duration::from_secs(1)).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
                 let _ = adapter.connect_device(device).await;
                 continue;
             }
@@ -67,7 +67,7 @@ async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str, ui_
                 let error_msg = format!("Service discovery error: {}. Retrying...", e);
                 let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(error_msg.clone().into()));
                 let _ = adapter.disconnect_device(device).await;
-                async_std::task::sleep(Duration::from_secs(1)).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
                 let _ = adapter.connect_device(device).await;
                 continue;
             }
@@ -75,7 +75,7 @@ async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str, ui_
                 let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("Service discovery timed out. Retrying...".into()));
                 if attempt >= 3 {
                     let _ = adapter.disconnect_device(device).await;
-                    async_std::task::sleep(Duration::from_secs(1)).await;
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                     let _ = adapter.connect_device(device).await;
                 }
                 continue;
@@ -106,7 +106,7 @@ async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str, ui_
         }
         let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("TARGET_CHAR not found in services. Retrying...".into()));
         let _ = adapter.disconnect_device(device).await;
-        async_std::task::sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
         let _ = adapter.connect_device(device).await;
     }
     let file_name_str = std::path::Path::new(file_path).file_name().and_then(|name| name.to_str()).unwrap_or("unknown_file");
@@ -125,7 +125,7 @@ async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str, ui_
                 let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(err_msg.clone().into()));
                 return false;
             }
-            async_std::task::sleep(Duration::from_millis(10)).await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("File sent successfully".into()));
         true
@@ -252,6 +252,7 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
 
 #[cfg(not(target_os = "android"))]
 pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
+    let tokio_handle = tokio::runtime::Handle::current();
     let adapter = Arc::new(Adapter::default().await.ok_or("Bluetooth adapter not found").unwrap());
     let adapter_ui = Arc::clone(&adapter);
     let adapter_disconnect = Arc::clone(&adapter);
@@ -274,6 +275,7 @@ pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
     let disconnect_session = Arc::clone(&active_session);
     let ui_handle_for_callbacks = ui_handle_request.clone();
     let ui_handle_for_disconnect = ui_handle.clone();
+    let tokio_handle_disconnect = tokio_handle.clone();
     let _ = ui_handle_request.upgrade_in_event_loop(move |ui| {
         let identifier_name = Arc::clone(&identifier_name);
         ui.on_send_select_device_blue(move |identifier: SharedString| {
@@ -282,7 +284,7 @@ pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
             let active_session_clone = Arc::clone(&active_session);
             let ui_handle_spawn = ui_handle_for_callbacks.clone();
             *is_scanning_stop.lock().unwrap() = false;
-            async_std::task::spawn(async move {
+            tokio_handle.spawn(async move {
                 let file = FileDialog::new()
                     .set_directory("/")
                     .pick_file();
@@ -293,13 +295,13 @@ pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
                     let path_str = path.to_string_lossy().into_owned();
                     let path_str_clone = path_str.clone();
                     let _ = ui_handle_spawn.upgrade_in_event_loop(move |ui| ui.set_transfer_status(format!("Selected file: {}", path_str_clone).into()));
-                    async_std::task::sleep(Duration::from_secs(1)).await;
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                     match timeout(Duration::from_secs(10), adapter_connect.connect_device(&device_file)).await {
                         Ok(Ok(_)) => {
                             let identifier_msg = identifier.to_string();
                             let _ = ui_handle_spawn.upgrade_in_event_loop(move |ui| ui.set_transfer_status(format!("Connected to {}", identifier_msg).into()));
                             *active_session_clone.lock().unwrap() = Some(device);
-                            async_std::task::sleep(Duration::from_secs(1)).await;
+                            tokio::time::sleep(Duration::from_secs(1)).await;
                             let _ = ui_handle_spawn.upgrade_in_event_loop(|ui| ui.set_transfer_status("About to send file".into()));
                             let success = send_file_blue(&adapter_connect, &device_file, &path_str, ui_handle_spawn.clone()).await;
                             if success {
@@ -325,7 +327,7 @@ pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
                 let adapter_async = Arc::clone(&adapter_disconnect);
                 let is_scanning_start = Arc::clone(&is_scanning_start);
                 let ui_handle_disconnect_inner = ui_handle_for_disconnect.clone();
-                async_std::task::spawn(async move {
+                tokio_handle_disconnect.spawn(async move {
                     adapter_async.disconnect_device(&device).await.unwrap();
                     let _ = ui_handle_disconnect_inner.upgrade_in_event_loop(|ui| ui.set_transfer_status("Disconnected".into()));
                     *is_scanning_start.lock().unwrap() = true;
