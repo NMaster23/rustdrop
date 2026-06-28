@@ -138,8 +138,16 @@ async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str, ui_
 #[cfg(not(target_os = "android"))]
 pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_accepted: Arc<Mutex<Option<bool>>>) {
     let (sender_tx, mut receiver_rx) = channel::<PeripheralEvent>(256);
-    let mut peripheral = Peripheral::new(sender_tx).await.unwrap();
-    while !peripheral.is_powered().await.unwrap() {}
+    let mut peripheral = match Peripheral::new(sender_tx).await {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(format!("Bluetooth peripheral initialization failed: {:?}", e).into()));
+            return;
+        }
+    };
+    while !peripheral.is_powered().await.unwrap_or(false) {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
     let _ = peripheral.add_service(
         &Service {
             uuid: TARGET_SERVICE,
@@ -255,7 +263,13 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
 #[cfg(not(target_os = "android"))]
 pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
     let tokio_handle = tokio::runtime::Handle::current();
-    let adapter = Arc::new(Adapter::default().await.ok_or("Bluetooth adapter not found").unwrap());
+    let adapter = match Adapter::default().await {
+        Some(a) => Arc::new(a),
+        None => {
+            let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("Bluetooth adapter not found".into()));
+            return;
+        }
+    };
     let adapter_ui = Arc::clone(&adapter);
     let adapter_disconnect = Arc::clone(&adapter);
     let adapter_timeout = adapter.wait_available();
