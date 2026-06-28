@@ -147,7 +147,26 @@ class MainActivity : ComponentActivity() {
             val fileName = getFileName(uri) ?: "UnknownFile"
             val fileNameBytes = fileName.toByteArray(Charsets.UTF_8)
             val nameLen = fileNameBytes.size
-            val fileSize = getFileSize(uri)
+            var exactSize = 0L
+            var finalUri = uri
+            try {
+                val tempFile = File(cacheDir, "transfer_${System.currentTimeMillis()}.tmp")
+                contentResolver.openInputStream(uri)?.use { input ->
+                    FileOutputStream(tempFile).use { output ->
+                        val buf = ByteArray(8192)
+                        var read = input.read(buf)
+                        while (read != -1) {
+                            output.write(buf, 0, read)
+                            read = input.read(buf)
+                        }
+                    }
+                }
+                exactSize = tempFile.length()
+                finalUri = Uri.fromFile(tempFile)
+            } catch (e: Exception) {
+                exactSize = getFileSize(uri)
+            }
+            val fileSize = exactSize
 
             val headerBuffer = ByteBuffer.allocate(8 + 1 + nameLen)
             headerBuffer.order(ByteOrder.LITTLE_ENDIAN)
@@ -156,7 +175,7 @@ class MainActivity : ComponentActivity() {
             headerBuffer.put(fileNameBytes)
 
             bleSendingHeader = headerBuffer.array()
-            bleSendingUri = uri
+            bleSendingUri = finalUri
             bleSendingTotalSize = fileSize
             bleSendingOffset = 0L
             bleInputStream?.close()
@@ -722,11 +741,17 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
             return
         }
 
-        val chunkSize = minOf(negotiatedMtu - 3, (hSize + bleSendingTotalSize - bleSendingOffset).toInt())
+        val chunkSize = minOf(negotiatedMtu - 3, 256, (hSize + bleSendingTotalSize - bleSendingOffset).toInt())
         val chunk = if (bleSendingOffset < hSize) {
             header.copyOfRange(bleSendingOffset.toInt(), bleSendingOffset.toInt() + minOf(chunkSize, (hSize - bleSendingOffset).toInt()))
         } else {
-            if (bleInputStream == null) bleInputStream = contentResolver.openInputStream(bleSendingUri!!)
+            if (bleInputStream == null) {
+                bleInputStream = contentResolver.openInputStream(bleSendingUri!!)
+                val skipAmount = bleSendingOffset - hSize
+                if (skipAmount > 0) {
+                    bleInputStream?.skip(skipAmount)
+                }
+            }
             val buf = ByteArray(chunkSize)
             val read = bleInputStream?.read(buf) ?: -1
             if (read <= 0) { gatt.close(); return }
@@ -736,7 +761,19 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
         lastChunkSize = chunk.size
         char.value = chunk
         char.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        if (!gatt.writeCharacteristic(char)) Log.e("GattHandling", "Failed to write")
+        var retries = 0
+        var success = false
+        while (!success && retries < 5) {
+            success = gatt.writeCharacteristic(char)
+            if (!success) {
+                Log.e("GattHandling", "Failed to write, retrying... $retries")
+                Thread.sleep(50)
+                retries++
+            }
+        }
+        if (!success) {
+            Log.e("GattHandling", "Failed to write after retries")
+        }
     }
 
     val gattCallback = object : BluetoothGattCallback() {
@@ -790,9 +827,9 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
                 bleSendingOffset += lastChunkSize
                 sendNextChunk(gatt)
             } else {
-                Log.e("GattHandling", "Write failed: $status")
-                bleInputStream?.close(); bleInputStream = null
-                gatt.close()
+                Log.e("GattHandling", "Write failed: $status, retrying...")
+                // Retry same chunk
+                sendNextChunk(gatt)
             }
         }
     }
