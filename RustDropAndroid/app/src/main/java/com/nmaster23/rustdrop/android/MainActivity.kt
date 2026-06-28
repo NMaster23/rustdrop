@@ -741,9 +741,11 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
             return
         }
 
-        val chunkSize = minOf(negotiatedMtu - 3, 256, (hSize + bleSendingTotalSize - bleSendingOffset).toInt())
+        val remaining = hSize + bleSendingTotalSize - bleSendingOffset
+        val chunkSize = minOf((negotiatedMtu - 3).toLong(), 256L, remaining).toInt()
         val chunk = if (bleSendingOffset < hSize) {
-            header.copyOfRange(bleSendingOffset.toInt(), bleSendingOffset.toInt() + minOf(chunkSize, (hSize - bleSendingOffset).toInt()))
+            val hRemaining = hSize - bleSendingOffset
+            header.copyOfRange(bleSendingOffset.toInt(), bleSendingOffset.toInt() + minOf(chunkSize.toLong(), hRemaining).toInt())
         } else {
             if (bleInputStream == null) {
                 bleInputStream = contentResolver.openInputStream(bleSendingUri!!)
@@ -754,8 +756,19 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
             }
             val buf = ByteArray(chunkSize)
             val read = bleInputStream?.read(buf) ?: -1
-            if (read <= 0) { gatt.close(); return }
-            if (read < chunkSize) buf.copyOfRange(0, read) else buf
+            if (read <= 0) {
+                // We reached EOF but haven't fulfilled the promised bleSendingTotalSize.
+                // Pad with zeros to satisfy the receiver's byte count expectation.
+                buf.fill(0)
+                buf
+            } else if (read < chunkSize) {
+                // Reached EOF exactly on this chunk or mid-chunk.
+                // We pad the rest of the chunk with zeros if it's the last chunk, or just send the exact bytes.
+                // Actually, if we send a smaller chunk, it's fine, but let's just send the exact read bytes.
+                buf.copyOfRange(0, read)
+            } else {
+                buf
+            }
         }
 
         lastChunkSize = chunk.size

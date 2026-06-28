@@ -197,7 +197,7 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                             let _ = ui_handle.upgrade_in_event_loop(|ui| {
                                 ui.set_transfer_decision_made(false);
                                 ui.set_receiving_file(true);
-                                ui.set_transfer_progress(0.05);
+                                ui.set_transfer_progress(0.0);
                             });
                             is_receiving = true;
                         }
@@ -213,9 +213,16 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                             let received_so_far = received_data.len() as f32;
                             let total_size = total_expected_size as f32;
                             let progress = (received_so_far / total_size).min(0.99);
-                            let _ = ui_handle.upgrade_in_event_loop(move |ui| {
-                                ui.set_transfer_progress(progress);
-                            });
+                            let accepted = *file_accepted.lock().unwrap();
+                            if accepted == Some(true) {
+                                // Throttle UI updates (e.g., only update every ~256 chunks or at specific progress intervals)
+                                // We can use modulo on received_data.len() to reduce UI thread spam
+                                if received_data.len() % (1024 * 32) < 512 || received_data.len() >= total_expected_size {
+                                    let _ = ui_handle.upgrade_in_event_loop(move |ui| {
+                                        ui.set_transfer_progress(progress);
+                                    });
+                                }
+                            }
                             if received_data.len() >= total_expected_size {
                                 let mut filename = String::from_utf8_lossy(&received_data[9..9 + name_len]).to_string();
                                 filename = filename.chars().filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_').collect();
