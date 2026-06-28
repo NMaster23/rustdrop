@@ -720,7 +720,9 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
             Log.i("GattHandling", "Finished sending file")
             bleInputStream?.close(); bleInputStream = null
             Handler(Looper.getMainLooper()).post { Toast.makeText(this@gattHandling, "File Sent!", Toast.LENGTH_SHORT).show() }
-            gatt.close()
+            Handler(Looper.getMainLooper()).postDelayed({
+                try { gatt.close() } catch (e: Exception) {}
+            }, 1500)
             return
         }
 
@@ -757,12 +759,7 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
 
         lastChunkSize = chunk.size
         
-        val isLastChunk = bleSendingOffset + chunk.size >= hSize + bleSendingTotalSize
-        val writeType = if (isLastChunk) {
-            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        } else {
-            BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-        }
+        val writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
         var retries = 0
         var success = false
         while (!success && retries < 5) {
@@ -798,8 +795,13 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
                     Log.i("GattHandling", "Disconnected (status=$status)")
                     bleInputStream?.close(); bleInputStream = null
                     gatt.close()
-                    Handler(Looper.getMainLooper()).post {
-                        Toast.makeText(this@gattHandling, "Desktop Disconnected!", Toast.LENGTH_SHORT).show()
+                    val header = bleSendingHeader
+                    val hSize = header?.size?.toLong() ?: 0L
+                    val isFinished = header != null && bleSendingOffset >= hSize + bleSendingTotalSize
+                    if (!isFinished) {
+                        Handler(Looper.getMainLooper()).post {
+                            Toast.makeText(this@gattHandling, "Desktop Disconnected!", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 }
                 else -> Log.d("GattHandling", "State changed to $newState")
