@@ -604,6 +604,11 @@ fun MainActivity.gattServerHandling() {
                 value
             )
             if (characteristic?.uuid == targetChar && value != null) {
+                if (responseNeeded && device != null) {
+                    if (hasBluetoothConnectPermission()) {
+                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
+                    }
+                }
                 if (!isReceivingFile) {
                     headerBuffer.write(value)
                     val buffer = headerBuffer.toByteArray()
@@ -619,37 +624,6 @@ fun MainActivity.gattServerHandling() {
                                 incomingFileName = "RustDrop_File_Error"
                             }
                             
-                            val latch = java.util.concurrent.CountDownLatch(1)
-                            var accepted = false
-                            Handler(Looper.getMainLooper()).post {
-                                incomingFileRequest.value = incomingFileName
-                                acceptCallback = {
-                                    accepted = true
-                                    latch.countDown()
-                                }
-                                rejectCallback = {
-                                    accepted = false
-                                    latch.countDown()
-                                }
-                            }
-                            try { latch.await(30, java.util.concurrent.TimeUnit.SECONDS) } catch(e: Exception) {}
-                            
-                            if (!accepted) {
-                                Handler(Looper.getMainLooper()).post {
-                                    incomingFileRequest.value = null
-                                    Toast.makeText(this@gattServerHandling, "File rejected", Toast.LENGTH_SHORT).show()
-                                }
-                                isReceivingFile = false
-                                bytesReceived = 0
-                                headerBuffer.reset()
-                                if (responseNeeded && device != null) {
-                                    if (hasBluetoothConnectPermission()) {
-                                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, offset, value)
-                                    }
-                                }
-                                return
-                            }
-                            
                             fileOutputStream = createDownloadStream(incomingFileName)
                             val remainingData = buffer.copyOfRange(headerSize, buffer.size)
                             startReceivingUI(true)
@@ -662,11 +636,23 @@ fun MainActivity.gattServerHandling() {
                             isReceivingFile = true
                             Log.i("GattServer", "Started receiving file: $incomingFileName ($fileSize bytes)")
                             Handler(Looper.getMainLooper()).post {
-                                Toast.makeText(this@gattServerHandling, "Receiving: $incomingFileName", Toast.LENGTH_SHORT).show()
+                                incomingFileRequest.value = incomingFileName
+                                acceptCallback = {
+                                    incomingFileRequest.value = null
+                                    Toast.makeText(this@gattServerHandling, "Receiving: $incomingFileName", Toast.LENGTH_SHORT).show()
+                                }
+                                rejectCallback = {
+                                    incomingFileRequest.value = null
+                                    isReceivingFile = false
+                                    bytesReceived = 0
+                                    fileOutputStream?.close()
+                                    fileOutputStream = null
+                                    Toast.makeText(this@gattServerHandling, "File rejected", Toast.LENGTH_SHORT).show()
+                                }
                             }
                             if (bytesReceived >= fileSize) {
-                                fileOutputStream!!.flush()
-                                fileOutputStream!!.close()
+                                fileOutputStream?.flush()
+                                fileOutputStream?.close()
                                 isReceivingFile = false
                                 bytesReceived = 0
                                 Log.i("GattServer", "File saved to Downloads: $incomingFileName")
@@ -686,11 +672,6 @@ fun MainActivity.gattServerHandling() {
                         headerBuffer.reset()
                         Log.i("GattServer", "File saved to Downloads: $incomingFileName")
                         stopReceivingUI()
-                    }
-                }
-                if (responseNeeded && device != null) {
-                    if (hasBluetoothConnectPermission()) {
-                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
                     }
                 }
             }
