@@ -166,7 +166,27 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
     let mut received_data = Vec::new();
     let mut is_receiving = false;
     loop {
-        match receiver_rx.recv().await {
+        let event_opt = if is_receiving {
+            match tokio::time::timeout(std::time::Duration::from_secs(15), receiver_rx.recv()).await {
+                Ok(evt) => evt,
+                Err(_) => {
+                    let _ = ui_handle.upgrade_in_event_loop(|ui| {
+                        ui.set_transfer_status("Transfer timed out".into());
+                        ui.set_receiving_file(false);
+                        ui.set_transfer_progress(0.0);
+                        ui.set_show_transfer_message(true);
+                        ui.set_transfer_message("Transfer timed out".into());
+                    });
+                    is_receiving = false;
+                    received_data.clear();
+                    continue;
+                }
+            }
+        } else {
+            receiver_rx.recv().await
+        };
+        
+        match event_opt {
             Some(event) => {
                 match event {
                     PeripheralEvent::WriteRequest { request: _, value, offset: _, responder } => {

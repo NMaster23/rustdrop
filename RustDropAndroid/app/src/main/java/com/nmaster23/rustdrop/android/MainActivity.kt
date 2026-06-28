@@ -169,9 +169,21 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun getFileSize(uri: android.net.Uri): Long {
-        return contentResolver.openAssetFileDescriptor(uri, "r")?.use {
-            it.length
-        } ?: 0L
+        var size = 0L
+        contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val sizeIndex = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+            if (sizeIndex != -1 && cursor.moveToFirst()) {
+                if (!cursor.isNull(sizeIndex)) {
+                    size = cursor.getLong(sizeIndex)
+                }
+            }
+        }
+        if (size == 0L) {
+            contentResolver.openAssetFileDescriptor(uri, "r")?.use {
+                size = it.length
+            }
+        }
+        return size
     }
 
     fun getFileName(uri: android.net.Uri): String? {
