@@ -728,7 +728,7 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
             bleInputStream?.close(); bleInputStream = null
             Handler(Looper.getMainLooper()).post { Toast.makeText(this@gattHandling, "File Sent!", Toast.LENGTH_SHORT).show() }
             Handler(Looper.getMainLooper()).postDelayed({
-                try { gatt.close() } catch (e: Exception) {}
+                try { gatt.disconnect() } catch (e: Exception) {}
             }, 1500)
             return
         }
@@ -830,7 +830,7 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
                     sendNextChunk(gatt)
                 } else {
                     Log.e("GattHandling", "Target characteristic not found or no file data.")
-                    gatt.close()
+                    gatt.disconnect()
                 }
             }
         }
