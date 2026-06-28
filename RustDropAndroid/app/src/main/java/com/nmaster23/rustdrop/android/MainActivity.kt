@@ -8,6 +8,7 @@ import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothStatusCodes
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -755,12 +756,19 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
         }
 
         lastChunkSize = chunk.size
-        char.value = chunk
-        char.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        
+        val writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
         var retries = 0
         var success = false
         while (!success && retries < 5) {
-            success = gatt.writeCharacteristic(char)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                success = gatt.writeCharacteristic(char, chunk, writeType) == BluetoothStatusCodes.SUCCESS
+            } else {
+                char.value = chunk
+                char.writeType = writeType
+                success = gatt.writeCharacteristic(char)
+            }
+            
             if (!success) {
                 Log.e("GattHandling", "Failed to write, retrying... $retries")
                 Thread.sleep(50)
