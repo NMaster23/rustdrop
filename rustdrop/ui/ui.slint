@@ -46,6 +46,7 @@ export component AppWindow inherits Window {
     in-out property <[WifiDevice]> wifi_devices: [];
     in-out property <[BlueDevice]> blue_devices: [];
     in-out property <bool> sending_file;
+    in-out property <float> sending_progress: 0%;
     in-out property <bool> blue_connected_menu;
     in-out property <bool> receiving_file: false;
     in-out property <string> transfer_status: "";
@@ -60,7 +61,7 @@ export component AppWindow inherits Window {
     callback file_accept();
     callback file_reject();
     
-    if (!blue_connected_menu && !receiving_file && !show_transfer_message): ScrollView {
+    if (!sending_file && !blue_connected_menu && !receiving_file && !show_transfer_message): ScrollView {
         VerticalLayout {
             alignment: start;
             spacing: 10px;
@@ -177,6 +178,32 @@ export component AppWindow inherits Window {
             text: transfer_message;
             font-size: 14px;
             wrap: word-wrap;
+        }
+    }
+    if (sending_file && !show_transfer_message): VerticalLayout {
+        alignment: center;
+        spacing: 20px;
+        padding: 30px;
+
+        if (sending_progress > 0 && sending_progress < 1.0): VerticalLayout {
+            spacing: 15px;
+            Text {
+                text: "Sending file...";
+                font-size: 18px;
+                font-weight: 600;
+                horizontal-alignment: center;
+            }
+            ProgressIndicator {
+                width: 100%;
+                height: 20px;
+                progress: sending_progress;
+            }
+            Text {
+                text: Math.round(sending_progress * 100) + "%";
+                font-size: 14px;
+                font-weight: 500;
+                horizontal-alignment: center;
+            }
         }
     }
 }

@@ -5,6 +5,7 @@ use crate::RustDropUiCallback;
 
 use futures_util::stream::StreamExt;
 use bluest::*;
+use notify_rust::Notification;
 use std::rc::Rc;
 #[cfg(not(target_os = "android"))]
 use rfd::FileDialog;
@@ -119,15 +120,39 @@ async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str, ui_
     to_send.extend_from_slice(file_name);
     to_send.extend_from_slice(&file_bytes);
     if let Some(write_char) = service_char {
+        let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_sending_file(true));
+        let mut sent = 0_usize;
+        let total = to_send.len();
         for chunk in to_send.chunks(500) {
             if let Err(e) = write_char.write(chunk).await {
                 let err_msg = format!("Error Sending Chunk: {}", e);
-                let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(err_msg.clone().into()));
+                let _ = ui_handle.upgrade_in_event_loop(move |ui| {
+                    ui.set_sending_file(false);
+                    ui.set_transfer_status(err_msg.clone().into());
+                });
                 return false;
             }
+            sent += chunk.len();
+            let progress = (sent as f32 / total as f32).min(0.99);
+            let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_sending_progress(progress));
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("File sent successfully".into()));
+        let _ = ui_handle.upgrade_in_event_loop(|ui| {
+            ui.set_sending_file(false);
+            ui.set_sending_progress(0.0);
+            ui.set_transfer_status("File sent successfully".into());
+        });
+        let icon_path = format!("{}/icon.png", env!("CARGO_MANIFEST_DIR"));
+        Notification::new()
+            .app_id("RustDrop")
+            .appname("RustDrop")
+            .summary("RustDrop: Transfer Complete")
+            .body("The file was sent successfully!")
+            .icon(&icon_path)
+            .image_path(&icon_path)
+            .show()
+            .unwrap();
+        let _ = adapter.disconnect_device(device).await;
         true
     } else {
         let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("TARGET_CHAR not found on device".into()));
@@ -200,6 +225,16 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                                 ui.set_transfer_progress(0.05);
                             });
                             is_receiving = true;
+                            let icon_path = format!("{}/icon.png", env!("CARGO_MANIFEST_DIR"));
+                            Notification::new()
+                                .app_id("RustDrop")
+                                .appname("RustDrop")
+                                .summary("RustDrop: Receiving File")
+                                .body("A file transfer is in progress...")
+                                .icon(&icon_path)
+                                .image_path(&icon_path)
+                                .show()
+                                .unwrap();
                         }
                         
                         received_data.extend_from_slice(&value);
@@ -220,6 +255,15 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                                         ui.set_transfer_progress(progress);
                                     });
                                 }
+                            } else if accepted == Some(false) {
+                                let _ = ui_handle.upgrade_in_event_loop(|ui| {
+                                    ui.set_receiving_file(false);
+                                    ui.set_transfer_progress(0.0);
+                                    ui.set_show_transfer_message(false);
+                                });
+                                is_receiving = false;
+                                received_data.clear();
+                                continue;
                             }
                             if received_data.len() >= total_expected_size {
                                 let mut filename = String::from_utf8_lossy(&received_data[9..9 + name_len]).to_string();

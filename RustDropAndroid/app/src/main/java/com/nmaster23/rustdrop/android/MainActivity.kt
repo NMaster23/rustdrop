@@ -55,6 +55,15 @@ import java.io.FileOutputStream
 import java.net.InetAddress
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.os.Build
+
+const val CHANNEL_ID = "Rustdrop_Transfers"
+const val NOTIF_ID_RECEIVING = 101
+const val NOTIF_ID_SENDING = 102
 
 val targetService: java.util.UUID = java.util.UUID.fromString("00001825-0000-1000-8000-00805f9b34fb")
 val targetChar: java.util.UUID = java.util.UUID.fromString("00002ac5-0000-1000-8000-00805f9b34fb")
@@ -88,6 +97,14 @@ fun android.content.Context.hasMulticastPermission(): Boolean {
     return androidx.core.content.ContextCompat.checkSelfPermission(this, Manifest.permission.CHANGE_WIFI_MULTICAST_STATE) == PackageManager.PERMISSION_GRANTED
 }
 
+fun android.content.Context.hasNotificationPermission(): Boolean {
+    return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        androidx.core.content.ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    } else {
+        true
+    }
+}
+
 class MainActivity : ComponentActivity() {
     var isScanning = false
     var leScanCallback: android.bluetooth.le.ScanCallback? = null
@@ -116,18 +133,25 @@ class MainActivity : ComponentActivity() {
     val isReceivingDialogVisible = androidx.compose.runtime.mutableStateOf(false)
     val receivingProgress = androidx.compose.runtime.mutableStateOf<Float?>(null)
     var receivingStartTime = 0L
+    val isSendingDialogVisible = androidx.compose.runtime.mutableStateOf(false)
+    val sendingProgress = androidx.compose.runtime.mutableStateOf<Float?>(null)
+    var sendingStartTime = 0L
+    var sendingFileNameForNotif: String? = null
+    var receivingFileNameForNotif: String? = null
 
     fun startReceivingUI(isDeterminate: Boolean) {
         Handler(Looper.getMainLooper()).post {
             receivingStartTime = System.currentTimeMillis()
             receivingProgress.value = if (isDeterminate) 0f else null
             isReceivingDialogVisible.value = true
+            receivingFileNameForNotif?.let { showReceivingNotification(it, if (isDeterminate) 0f else null) }
         }
     }
 
     fun updateReceivingUI(progress: Float) {
         Handler(Looper.getMainLooper()).post {
             receivingProgress.value = progress
+            receivingFileNameForNotif?.let { showReceivingNotification(it, progress) }
         }
     }
 
@@ -138,9 +162,37 @@ class MainActivity : ComponentActivity() {
             if (receivingProgress.value != null) {
                 receivingProgress.value = 1f
             }
+            receivingFileNameForNotif?.let { showReceivingNotification(it, 1f, completed = true) }
         }
         Handler(Looper.getMainLooper()).postDelayed({
             isReceivingDialogVisible.value = false
+        }, delay)
+    }
+
+    fun startSendingUI(isDeterminate: Boolean) {
+        Handler(Looper.getMainLooper()).post {
+            sendingStartTime = System.currentTimeMillis()
+            sendingProgress.value = if (isDeterminate) 0f else null
+            isSendingDialogVisible.value = true
+        }
+    }
+
+    fun updateSendingUI(progress: Float) {
+        Handler(Looper.getMainLooper()).post {
+            sendingProgress.value = progress
+        }
+    }
+
+    fun stopSendingUI() {
+        val duration = System.currentTimeMillis() - sendingStartTime
+        val delay = if (duration < 1000L) 1000L - duration else 0L
+        Handler(Looper.getMainLooper()).post {
+            if (sendingProgress.value != null) {
+                sendingProgress.value = 1f
+            }
+        }
+        Handler(Looper.getMainLooper()).postDelayed({
+            isSendingDialogVisible.value = false
         }, delay)
     }
 
@@ -184,8 +236,13 @@ class MainActivity : ComponentActivity() {
             bleInputStream?.close()
             bleInputStream = null
 
+            sendingFileNameForNotif = fileName
+            showSendingNotification(fileName, 0f)
             gattHandling(selectedDeviceForSending!!)
         } else if (selectedWifiDevice != null) {
+            val fileName = getFileName(uri) ?: "UnknownFile"
+            sendingFileNameForNotif = fileName
+            showSendingNotification(fileName, 0f)
             sendFileWifi(selectedWifiDevice!!, uri)
         }
     }
@@ -277,6 +334,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        createNotificationChannel()
         enableEdgeToEdge()
         permissionHandling()
         mdnsHandling()
@@ -349,6 +407,27 @@ class MainActivity : ComponentActivity() {
                             confirmButton = {}
                         )
                     }
+
+                    if (isSendingDialogVisible.value) {
+                        androidx.compose.material3.AlertDialog(
+                            onDismissRequest = { },
+                            title = { Text("Sending File...") },
+                            text = {
+                                androidx.compose.foundation.layout.Box(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    contentAlignment = androidx.compose.ui.Alignment.Center
+                                ) {
+                                    val progress = sendingProgress.value
+                                    if (progress != null) {
+                                        androidx.compose.material3.LinearProgressIndicator(progress = progress)
+                                    } else {
+                                        androidx.compose.material3.LinearProgressIndicator()
+                                    }
+                                }
+                            },
+                            confirmButton = {}
+                        )
+                    }
                 }
             }
         }
@@ -404,15 +483,17 @@ fun UserInterface(
 }
 
 fun MainActivity.permissionHandling() {
-    requestPermissionLauncher.launch(
-        arrayOf(
-            Manifest.permission.BLUETOOTH_SCAN,
-            Manifest.permission.BLUETOOTH_ADVERTISE,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION,
-            Manifest.permission.BLUETOOTH_CONNECT
-        )
+    val perms = mutableListOf(
+        Manifest.permission.BLUETOOTH_SCAN,
+        Manifest.permission.BLUETOOTH_ADVERTISE,
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.ACCESS_COARSE_LOCATION,
+        Manifest.permission.BLUETOOTH_CONNECT
     )
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        perms.add(Manifest.permission.POST_NOTIFICATIONS)
+    }
+    requestPermissionLauncher.launch(perms.toTypedArray())
 }
 
 fun MainActivity.bleAdvertising() {
@@ -628,6 +709,7 @@ fun MainActivity.gattServerHandling() {
                             }
                             
                             fileOutputStream = createDownloadStream(incomingFileName)
+                            receivingFileNameForNotif = incomingFileName
                             val remainingData = buffer.copyOfRange(headerSize, buffer.size)
                             if (remainingData.isNotEmpty() && fileOutputStream != null) {
                                 fileOutputStream!!.write(remainingData)
@@ -725,7 +807,13 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
             Handler(Looper.getMainLooper()).postDelayed({
                 try { gatt.close() } catch (e: Exception) {}
             }, 1500)
+            sendingFileNameForNotif?.let { showSendingNotification(it, 1f, completed = true) }
+            stopSendingUI()
             return
+        } else {
+            val progress = bleSendingOffset.toFloat() / (hSize + bleSendingTotalSize).toFloat()
+            sendingFileNameForNotif?.let { showSendingNotification(it, progress) }
+            updateSendingUI(progress)
         }
 
         val chunk = if (isRetry && lastChunk != null) {
@@ -807,6 +895,8 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
                         Handler(Looper.getMainLooper()).post {
                             Toast.makeText(this@gattHandling, "Desktop Disconnected!", Toast.LENGTH_SHORT).show()
                         }
+                        sendingFileNameForNotif?.let { showSendingNotification(it, null, failed = true) }
+                        stopSendingUI()
                     }
                 }
                 else -> Log.d("GattHandling", "State changed to $newState")
@@ -824,9 +914,12 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
                 val service = gatt.getService(targetService)
                 targetCharacteristic = service?.getCharacteristic(targetChar)
                 if (targetCharacteristic != null && bleSendingUri != null) {
+                    startSendingUI(true)
                     sendNextChunk(gatt)
                 } else {
                     Log.e("GattHandling", "Target characteristic not found or no file data.")
+                    sendingFileNameForNotif?.let { showSendingNotification(it, null, failed = true) }
+                    stopSendingUI()
                     gatt.close()
                 }
             }
@@ -843,7 +936,6 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
                 sendNextChunk(gatt)
             } else {
                 Log.e("GattHandling", "Write failed: $status, retrying...")
-                // Retry same chunk
                 sendNextChunk(gatt, isRetry = true)
             }
         }
@@ -1011,6 +1103,8 @@ fun MainActivity.wifiServer() {
                         .replace(Regex("[^a-zA-Z0-9.\\-_]"), "")
                         .ifEmpty { "wifi_transfer_${System.currentTimeMillis()}" }
                     
+                    receivingFileNameForNotif = fileName
+                    
                     val latch = java.util.concurrent.CountDownLatch(1)
                     var accepted = false
                     Handler(Looper.getMainLooper()).post {
@@ -1059,19 +1153,34 @@ fun MainActivity.sendFileWifi(ip: String, uri: Uri) {
                 val nameEncoded = "${nameAsBytes.size.toString(16)}\r\n$fileName\r\n0\r\n\r\n".toByteArray(Charsets.UTF_8)
                 output.write(nameEncoded.size)
                 output.write(nameEncoded)
+                startSendingUI(true)
                 contentResolver.openInputStream(uri)?.use { inputStream ->
-                    inputStream.copyTo(output)
+                    val fileSize = inputStream.available().toFloat()
+                    var sent = 0L
+                    val buffer = ByteArray(8192)
+                    var bytesRead: Int
+                    while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                        output.write(buffer, 0, bytesRead)
+                        sent += bytesRead
+                        val progress = if (fileSize > 0) sent.toFloat() / fileSize else 0f
+                        updateSendingUI(progress)
+                        sendingFileNameForNotif?.let { showSendingNotification(it, progress) }
+                    }
                 }
                 output.flush()
                 Handler(Looper.getMainLooper()).post {
                     Toast.makeText(this@sendFileWifi, "WiFi File Sent!", Toast.LENGTH_SHORT).show()
                 }
+                sendingFileNameForNotif?.let { showSendingNotification(it, 1f, completed = true) }
+                stopSendingUI()
             }
         } catch (e: Exception) {
             Log.e("WifiSend", "Error: ${e.message}")
             Handler(Looper.getMainLooper()).post {
                 Toast.makeText(this@sendFileWifi, "WiFi Send Failed", Toast.LENGTH_SHORT).show()
             }
+            sendingFileNameForNotif?.let { showSendingNotification(it, null, failed = true) }
+            stopSendingUI()
         }
     }.start()
 }
@@ -1079,4 +1188,82 @@ fun MainActivity.sendFileWifi(ip: String, uri: Uri) {
 fun android.content.Context.createDownloadStream(fileName: String): java.io.OutputStream? {
     val uri = contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, android.content.ContentValues().apply { put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, fileName) })
     return uri?.let { contentResolver.openOutputStream(it) }
+}
+
+fun MainActivity.createNotificationChannel() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val name = "Transfers"
+        val descriptionText = "File transfer progress"
+        val importance = NotificationManager.IMPORTANCE_DEFAULT
+        val channel = NotificationChannel(CHANNEL_ID, name, importance).apply {
+            description = descriptionText
+        }
+        val notificationManager: NotificationManager =
+            getSystemService(android.content.Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.createNotificationChannel(channel)
+    }
+}
+
+fun MainActivity.showReceivingNotification(fileName: String, progress: Float?, completed: Boolean = false, failed: Boolean = false) {
+    if (!hasNotificationPermission()) return
+    val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+        .setSmallIcon(android.R.drawable.stat_sys_download)
+        .setContentTitle("Receiving: $fileName")
+        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+        .setOnlyAlertOnce(true)
+        .setOngoing(!completed && !failed)
+        
+    if (completed) {
+        builder.setContentText("Transfer complete")
+            .setProgress(0, 0, false)
+            .setOngoing(false)
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+    } else if (failed) {
+        builder.setContentText("Transfer failed")
+            .setProgress(0, 0, false)
+            .setOngoing(false)
+            .setSmallIcon(android.R.drawable.stat_notify_error)
+    } else if (progress != null) {
+        builder.setProgress(100, (progress * 100).toInt(), false)
+            .setContentText("${(progress * 100).toInt()}%")
+    } else {
+        builder.setProgress(0, 0, true)
+            .setContentText("Connecting...")
+    }
+    
+    try {
+        NotificationManagerCompat.from(this).notify(NOTIF_ID_RECEIVING, builder.build())
+    } catch (e: SecurityException) {}
+}
+
+fun MainActivity.showSendingNotification(fileName: String, progress: Float?, completed: Boolean = false, failed: Boolean = false) {
+    if (!hasNotificationPermission()) return
+    val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+        .setSmallIcon(android.R.drawable.stat_sys_upload)
+        .setContentTitle("Sending: $fileName")
+        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+        .setOnlyAlertOnce(true)
+        .setOngoing(!completed && !failed)
+        
+    if (completed) {
+        builder.setContentText("Transfer complete")
+            .setProgress(0, 0, false)
+            .setOngoing(false)
+            .setSmallIcon(android.R.drawable.stat_sys_upload_done)
+    } else if (failed) {
+        builder.setContentText("Transfer failed")
+            .setProgress(0, 0, false)
+            .setOngoing(false)
+            .setSmallIcon(android.R.drawable.stat_notify_error)
+    } else if (progress != null) {
+        builder.setProgress(100, (progress * 100).toInt(), false)
+            .setContentText("${(progress * 100).toInt()}%")
+    } else {
+        builder.setProgress(0, 0, true)
+            .setContentText("Connecting...")
+    }
+    
+    try {
+        NotificationManagerCompat.from(this).notify(NOTIF_ID_SENDING, builder.build())
+    } catch (e: SecurityException) {}
 }
