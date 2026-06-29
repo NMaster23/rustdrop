@@ -687,7 +687,7 @@ fun MainActivity.gattServerHandling() {
     val service = BluetoothGattService(targetService, BluetoothGattService.SERVICE_TYPE_PRIMARY)
     val characteristic = BluetoothGattCharacteristic(
         targetChar,
-        BluetoothGattCharacteristic.PROPERTY_WRITE,
+        BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
         BluetoothGattCharacteristic.PERMISSION_WRITE
     )
     service.addCharacteristic(characteristic)
