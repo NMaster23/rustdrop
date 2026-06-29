@@ -119,7 +119,7 @@ async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str, ui_
     to_send.extend_from_slice(file_name);
     to_send.extend_from_slice(&file_bytes);
     if let Some(write_char) = service_char {
-        for chunk in to_send.chunks(20) {
+        for chunk in to_send.chunks(500) {
             if let Err(e) = write_char.write(chunk).await {
                 let err_msg = format!("Error Sending Chunk: {}", e);
                 let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(err_msg.clone().into()));
@@ -155,7 +155,7 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
             characteristics: vec![
                 Characteristic {
                     uuid: TARGET_CHAR,
-                    properties: vec![CharacteristicProperty::Write],
+                    properties: vec![CharacteristicProperty::Write, CharacteristicProperty::WriteWithoutResponse],
                     ..Default::default()
                 }
             ],
