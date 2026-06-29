@@ -179,6 +179,17 @@ export component AppWindow inherits Window {
             font-size: 14px;
             wrap: word-wrap;
         }
+        HorizontalLayout {
+            alignment: center;
+            Button {
+                text: "OK";
+                height: 40px;
+                width: 100px;
+                clicked => {
+                    show_transfer_message = false;
+                }
+            }
+        }
     }
     if (sending_file && !show_transfer_message): VerticalLayout {
         alignment: center;

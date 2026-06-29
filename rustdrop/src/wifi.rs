@@ -78,7 +78,7 @@ fn send_file_wifi(ui_handle: slint::Weak<AppWindow>, ip: String, port: u32, file
         .app_id("RustDrop")
         .appname("RustDrop")
         .summary("RustDrop: Transfer Complete")
-        .body("The file was sent successfully over Wi-Fi!")
+        .body("The file was sent successfully over Wi-Fi! Auto disconnecting...")
         .icon(&icon_path)
         .image_path(&icon_path)
         .show();
@@ -108,8 +108,8 @@ async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std
                 let _ = Notification::new()
                     .app_id("RustDrop")
                     .appname("RustDrop")
-                    .summary("RustDrop: Receiving File")
-                    .body("A file transfer is in progress over Wi-Fi...")
+                    .summary("RustDrop: File Request Inbound")
+                    .body(&format!("Incoming file: {}. Please accept or reject in the app.", filename))
                     .icon(&icon_path)
                     .image_path(&icon_path)
                     .show();
@@ -166,7 +166,7 @@ async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std
                             .app_id("RustDrop")
                             .appname("RustDrop")
                             .summary("RustDrop: Transfer Complete")
-                            .body("The file was received successfully!")
+                            .body("The file was received successfully! Auto disconnecting...")
                             .icon(&icon_path)
                             .image_path(&icon_path)
                             .show();
@@ -185,7 +185,6 @@ async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std
                 let _ = ui_handle.upgrade_in_event_loop(|ui| {
                     ui.set_receiving_file(false);
                     ui.set_transfer_progress(0.0);
-                    ui.set_show_transfer_message(false);
                 });
             }
             Err(e) => {
