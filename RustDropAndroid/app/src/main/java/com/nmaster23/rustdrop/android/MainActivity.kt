@@ -677,13 +677,6 @@ fun MainActivity.gattServerHandling() {
                 }
             }
         }
-        
-        override fun onExecuteWrite(device: BluetoothDevice, requestId: Int, execute: Boolean) {
-            super.onExecuteWrite(device, requestId, execute)
-            if (hasBluetoothConnectPermission()) {
-                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
-            }
-        }
     }
 
     if (!hasBluetoothConnectPermission()) {
@@ -694,7 +687,7 @@ fun MainActivity.gattServerHandling() {
     val service = BluetoothGattService(targetService, BluetoothGattService.SERVICE_TYPE_PRIMARY)
     val characteristic = BluetoothGattCharacteristic(
         targetChar,
-        BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
+        BluetoothGattCharacteristic.PROPERTY_WRITE,
         BluetoothGattCharacteristic.PERMISSION_WRITE
     )
     service.addCharacteristic(characteristic)
