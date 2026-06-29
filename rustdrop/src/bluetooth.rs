@@ -155,7 +155,7 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
             characteristics: vec![
                 Characteristic {
                     uuid: TARGET_CHAR,
-                    properties: vec![CharacteristicProperty::Write, CharacteristicProperty::WriteWithoutResponse],
+                    properties: vec![CharacteristicProperty::Write],
                     ..Default::default()
                 }
             ],
