@@ -90,6 +90,7 @@ fun android.content.Context.hasMulticastPermission(): Boolean {
 
 class MainActivity : ComponentActivity() {
     var isScanning = false
+    var leScanCallback: android.bluetooth.le.ScanCallback? = null
 
     var gattServer: android.bluetooth.BluetoothGattServer? = null
     var gattServerCallbackRef: android.bluetooth.BluetoothGattServerCallback? = null
@@ -491,7 +492,7 @@ fun MainActivity.scanBleDevices() {
         .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
         .build()
 
-    val leScanCallback = object : ScanCallback() {
+    leScanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device
             val deviceName = if (hasBluetoothConnectPermission()) {
@@ -502,7 +503,6 @@ fun MainActivity.scanBleDevices() {
             Log.i("ScanBleDevices", "Found: ${device.address} ($deviceName)")
             if (discoveredDevices.none { it.address == device.address }) {
                 discoveredDevices.add(device)
-                Toast.makeText(this@scanBleDevices, "Found device: $deviceName", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -517,13 +517,15 @@ fun MainActivity.scanBleDevices() {
         discoveredDevices.clear()
         handler.postDelayed({
             isScanning = false
-            if (hasBluetoothScanPermission()) {
+            if (hasBluetoothScanPermission() && leScanCallback != null) {
                 bluetoothLeScanner.stopScan(leScanCallback)
             }
             Log.i("ScanBleDevices", "Stopping BLE scan after period...")
         }, SCAN_PERIOD)
         isScanning = true
-        bluetoothLeScanner.startScan(filters, settings, leScanCallback)
+        leScanCallback?.let {
+            bluetoothLeScanner.startScan(filters, settings, it)
+        }
         Log.i("ScanBleDevices", "Starting BLE scan (Filtered for $targetService)...")
     } else {
         Log.i("ScanBleDevices", "Already scanning...")
@@ -604,12 +606,12 @@ fun MainActivity.gattServerHandling() {
                 offset,
                 value
             )
-            if (characteristic?.uuid == targetChar && value != null) {
-                if (responseNeeded && device != null) {
-                    if (hasBluetoothConnectPermission()) {
-                        gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
-                    }
+            if (responseNeeded && device != null) {
+                if (hasBluetoothConnectPermission()) {
+                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value)
                 }
+            }
+            if (characteristic?.uuid == targetChar && value != null) {
                 if (!isReceivingFile) {
                     headerBuffer.write(value)
                     val buffer = headerBuffer.toByteArray()
@@ -627,7 +629,6 @@ fun MainActivity.gattServerHandling() {
                             
                             fileOutputStream = createDownloadStream(incomingFileName)
                             val remainingData = buffer.copyOfRange(headerSize, buffer.size)
-                            startReceivingUI(true)
                             if (remainingData.isNotEmpty() && fileOutputStream != null) {
                                 fileOutputStream!!.write(remainingData)
                                 bytesReceived += remainingData.size
@@ -640,6 +641,7 @@ fun MainActivity.gattServerHandling() {
                                 incomingFileRequest.value = incomingFileName
                                 acceptCallback = {
                                     incomingFileRequest.value = null
+                                    startReceivingUI(true)
                                     Toast.makeText(this@gattServerHandling, "Receiving: $incomingFileName", Toast.LENGTH_SHORT).show()
                                 }
                                 rejectCallback = {
@@ -687,7 +689,7 @@ fun MainActivity.gattServerHandling() {
     val service = BluetoothGattService(targetService, BluetoothGattService.SERVICE_TYPE_PRIMARY)
     val characteristic = BluetoothGattCharacteristic(
         targetChar,
-        BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE,
+        BluetoothGattCharacteristic.PROPERTY_WRITE,
         BluetoothGattCharacteristic.PERMISSION_WRITE
     )
     service.addCharacteristic(characteristic)
@@ -847,7 +849,21 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
         }
     }
     if (hasBluetoothConnectPermission()) {
-        device.connectGatt(this, false, gattCallback)
+        if (isScanning && leScanCallback != null) {
+            val bluetoothManager = getSystemService(BluetoothManager::class.java)
+            val bluetoothAdapter = bluetoothManager?.adapter
+            val scanner = bluetoothAdapter?.bluetoothLeScanner
+            if (hasBluetoothScanPermission()) {
+                scanner?.stopScan(leScanCallback)
+            }
+            isScanning = false
+            Log.i("GattHandling", "Stopped scanning before connecting.")
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            device.connectGatt(this, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+        } else {
+            device.connectGatt(this, false, gattCallback)
+        }
     }
 }
 

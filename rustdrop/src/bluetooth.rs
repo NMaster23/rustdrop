@@ -119,7 +119,7 @@ async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str, ui_
     to_send.extend_from_slice(file_name);
     to_send.extend_from_slice(&file_bytes);
     if let Some(write_char) = service_char {
-        for chunk in to_send.chunks(20) {
+        for chunk in to_send.chunks(500) {
             if let Err(e) = write_char.write(chunk).await {
                 let err_msg = format!("Error Sending Chunk: {}", e);
                 let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(err_msg.clone().into()));
@@ -155,7 +155,7 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
             characteristics: vec![
                 Characteristic {
                     uuid: TARGET_CHAR,
-                    properties: vec![CharacteristicProperty::Write, CharacteristicProperty::WriteWithoutResponse],
+                    properties: vec![CharacteristicProperty::Write],
                     ..Default::default()
                 }
             ],
@@ -230,6 +230,24 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                                 let file_data = &received_data[header_size..end_idx];
                                 let mut save_path = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
                                 save_path.push(&filename);
+                                let mut counter = 1;
+                                while save_path.exists() {
+                                    let mut new_filename = String::new();
+                                    let path_ref = std::path::Path::new(&filename);
+                                    if let Some(stem) = path_ref.file_stem().and_then(|s| s.to_str()) {
+                                        new_filename.push_str(stem);
+                                        new_filename.push_str(&format!(" ({})", counter));
+                                        if let Some(ext) = path_ref.extension().and_then(|e| e.to_str()) {
+                                            new_filename.push('.');
+                                            new_filename.push_str(ext);
+                                        }
+                                    } else {
+                                        new_filename = format!("{} ({})", filename, counter);
+                                    }
+                                    save_path = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+                                    save_path.push(&new_filename);
+                                    counter += 1;
+                                }
                                 
                                 let file_msg = format!("Received file {} with {} bytes. Saving to {:?}", filename, file_data.len(), save_path);
                                 let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(file_msg.clone().into()));
@@ -380,8 +398,8 @@ pub(crate) async fn bluetooth(ui_handle: slint::Weak<AppWindow>) {
         let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("Scan started".into()));
         loop {
             if !*is_scanning.lock().unwrap() {
-                let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_status("Scan stopped".into()));
-                break;
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                continue;
             }
             match timeout(Duration::from_millis(500), scan.next()).await {
                 Ok(Some(discovered_device)) => {

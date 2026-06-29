@@ -88,6 +88,24 @@ async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std
                 
                 let mut save_path = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
                 save_path.push(&filename);
+                let mut counter = 1;
+                while save_path.exists() {
+                    let mut new_filename = String::new();
+                    let path_ref = std::path::Path::new(&filename);
+                    if let Some(stem) = path_ref.file_stem().and_then(|s| s.to_str()) {
+                        new_filename.push_str(stem);
+                        new_filename.push_str(&format!(" ({})", counter));
+                        if let Some(ext) = path_ref.extension().and_then(|e| e.to_str()) {
+                            new_filename.push('.');
+                            new_filename.push_str(ext);
+                        }
+                    } else {
+                        new_filename = format!("{} ({})", filename, counter);
+                    }
+                    save_path = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+                    save_path.push(&new_filename);
+                    counter += 1;
+                }
                 let mut file = async_std::fs::File::create(&save_path).await.unwrap();
                 let start_time = std::time::Instant::now();
                 let _ = ui_handle.upgrade_in_event_loop(|ui| ui.set_transfer_progress(0.5));
@@ -163,10 +181,14 @@ pub(crate) async fn wifi(mdns: ServiceDaemon, ui_handle: slint::Weak<AppWindow>,
                 let ip = resolved.get_addresses().iter().find(|a| a.is_ipv4()).or_else(|| resolved.get_addresses().iter().next()).map(|a| a.to_string()).unwrap_or_default();
                 ui_handle_clone.upgrade_in_event_loop(move |ui| {
                     let mut devices: Vec<WifiDevice> = ui.get_wifi_devices().iter().collect();
-                    devices.push(WifiDevice {
-                        name: name.into(),
-                        ip: ip.into()
-                    });
+                    if let Some(existing) = devices.iter_mut().find(|d| d.ip == ip.as_str()) {
+                        existing.name = name.into();
+                    } else {
+                        devices.push(WifiDevice {
+                            name: name.into(),
+                            ip: ip.into()
+                        });
+                    }
                     ui.set_wifi_devices(slint::ModelRc::from(Rc::new(slint::VecModel::from(devices))));
                 }).unwrap();
             }
