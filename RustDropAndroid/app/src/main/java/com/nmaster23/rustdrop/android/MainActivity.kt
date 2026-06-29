@@ -759,7 +759,7 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
 
         lastChunkSize = chunk.size
         
-        val writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        val writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
         var retries = 0
         var success = false
         while (!success && retries < 5) {
