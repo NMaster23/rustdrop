@@ -759,7 +759,7 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
 
         lastChunkSize = chunk.size
         
-        val writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+        val writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
         var retries = 0
         var success = false
         while (!success && retries < 5) {
@@ -786,10 +786,13 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    Log.i("GattHandling", "Connected. Requesting MTU.")
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        if (hasBluetoothConnectPermission()) gatt.requestMtu(512)
-                    }, 500)
+                    Log.i("GattHandling", "Connected. Requesting MTU and discovering services.")
+                    if (hasBluetoothConnectPermission()) {
+                        gatt.requestMtu(512)
+                        Handler(Looper.getMainLooper()).postDelayed({
+                            gatt.discoverServices()
+                        }, 500)
+                    }
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.i("GattHandling", "Disconnected (status=$status)")
@@ -811,7 +814,6 @@ fun MainActivity.gattHandling(device: BluetoothDevice) {
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
             negotiatedMtu = if (status == BluetoothGatt.GATT_SUCCESS) mtu else 23
             Log.i("GattHandling", "MTU negotiated: $negotiatedMtu")
-            gatt.discoverServices()
         }
         @RequiresPermission(value = Manifest.permission.BLUETOOTH_CONNECT)
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
