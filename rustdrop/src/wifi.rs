@@ -74,15 +74,14 @@ fn send_file_wifi(ui_handle: slint::Weak<AppWindow>, ip: String, port: u32, file
         let _ = ui_handle.upgrade_in_event_loop(move |ui| ui.set_transfer_status(error_msg.into()));
     }
     let icon_path = format!("{}/icon.png", env!("CARGO_MANIFEST_DIR"));
-    Notification::new()
+    let _ = Notification::new()
         .app_id("RustDrop")
         .appname("RustDrop")
         .summary("RustDrop: Transfer Complete")
         .body("The file was sent successfully over Wi-Fi!")
         .icon(&icon_path)
         .image_path(&icon_path)
-        .show()
-        .unwrap();
+        .show();
 }
 
 async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std::sync::Arc<std::sync::Mutex<Option<bool>>>) {
@@ -106,15 +105,14 @@ async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std
                 let mut filename_decoder = Decoder::new(&mut filename_u8);
                 let _ = filename_decoder.read_to_string(&mut filename);
                 let icon_path = format!("{}/icon.png", env!("CARGO_MANIFEST_DIR"));
-                Notification::new()
+                let _ = Notification::new()
                     .app_id("RustDrop")
                     .appname("RustDrop")
                     .summary("RustDrop: Receiving File")
                     .body("A file transfer is in progress over Wi-Fi...")
                     .icon(&icon_path)
                     .image_path(&icon_path)
-                    .show()
-                    .unwrap();
+                    .show();
                 while file_accepted.lock().unwrap().is_none() {
                     async_std::task::sleep(std::time::Duration::from_millis(100)).await;
                 }
@@ -136,13 +134,13 @@ async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std
                     let path_ref = std::path::Path::new(&filename);
                     if let Some(stem) = path_ref.file_stem().and_then(|s| s.to_str()) {
                         new_filename.push_str(stem);
-                        new_filename.push_str(&format!(" ({})", counter));
+                        new_filename.push_str(&format!("_{}", counter));
                         if let Some(ext) = path_ref.extension().and_then(|e| e.to_str()) {
                             new_filename.push('.');
                             new_filename.push_str(ext);
                         }
                     } else {
-                        new_filename = format!("{} ({})", filename, counter);
+                        new_filename = format!("{}_{}", filename, counter);
                     }
                     save_path = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
                     save_path.push(&new_filename);
@@ -163,6 +161,15 @@ async fn receive_file_wifi(ui_handle: slint::Weak<AppWindow>, file_accepted: std
                 
                 let message = match result {
                     Ok(bytes) => {
+                        let icon_path = format!("{}/icon.png", env!("CARGO_MANIFEST_DIR"));
+                        let _ = Notification::new()
+                            .app_id("RustDrop")
+                            .appname("RustDrop")
+                            .summary("RustDrop: Transfer Complete")
+                            .body("The file was received successfully!")
+                            .icon(&icon_path)
+                            .image_path(&icon_path)
+                            .show();
                         format!("Received {} bytes and saved to {:?}", bytes, save_path)
                     },
                     Err(e) => {

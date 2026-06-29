@@ -143,15 +143,14 @@ async fn send_file_blue(adapter: &Adapter, device: &Device, file_path: &str, ui_
             ui.set_transfer_status("File sent successfully".into());
         });
         let icon_path = format!("{}/icon.png", env!("CARGO_MANIFEST_DIR"));
-        Notification::new()
+        let _ = Notification::new()
             .app_id("RustDrop")
             .appname("RustDrop")
             .summary("RustDrop: Transfer Complete")
             .body("The file was sent successfully!")
             .icon(&icon_path)
             .image_path(&icon_path)
-            .show()
-            .unwrap();
+            .show();
         let _ = adapter.disconnect_device(device).await;
         true
     } else {
@@ -226,15 +225,14 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                             });
                             is_receiving = true;
                             let icon_path = format!("{}/icon.png", env!("CARGO_MANIFEST_DIR"));
-                            Notification::new()
+                            let _ = Notification::new()
                                 .app_id("RustDrop")
                                 .appname("RustDrop")
                                 .summary("RustDrop: Receiving File")
                                 .body("A file transfer is in progress...")
                                 .icon(&icon_path)
                                 .image_path(&icon_path)
-                                .show()
-                                .unwrap();
+                                .show();
                         }
                         
                         received_data.extend_from_slice(&value);
@@ -280,13 +278,13 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                                     let path_ref = std::path::Path::new(&filename);
                                     if let Some(stem) = path_ref.file_stem().and_then(|s| s.to_str()) {
                                         new_filename.push_str(stem);
-                                        new_filename.push_str(&format!(" ({})", counter));
+                                        new_filename.push_str(&format!("_{}", counter));
                                         if let Some(ext) = path_ref.extension().and_then(|e| e.to_str()) {
                                             new_filename.push('.');
                                             new_filename.push_str(ext);
                                         }
                                     } else {
-                                        new_filename = format!("{} ({})", filename, counter);
+                                        new_filename = format!("{}_{}", filename, counter);
                                     }
                                     save_path = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
                                     save_path.push(&new_filename);
@@ -313,6 +311,15 @@ pub(crate) async fn receive_file_blue(ui_handle: slint::Weak<AppWindow>, file_ac
                                     if let Err(e) = std::fs::write(&save_path, file_data) {
                                         format!("Error saving file: {}", e)
                                     } else {
+                                        let icon_path = format!("{}/icon.png", env!("CARGO_MANIFEST_DIR"));
+                                        let _ = Notification::new()
+                                            .app_id("RustDrop")
+                                            .appname("RustDrop")
+                                            .summary("RustDrop: Transfer Complete")
+                                            .body("The file was received successfully!")
+                                            .icon(&icon_path)
+                                            .image_path(&icon_path)
+                                            .show();
                                         format!("File saved successfully to {:?}", save_path)
                                     }
                                 } else {

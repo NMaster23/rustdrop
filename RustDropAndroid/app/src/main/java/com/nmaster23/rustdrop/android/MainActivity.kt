@@ -1217,6 +1217,8 @@ fun MainActivity.showReceivingNotification(fileName: String, progress: Float?, c
         builder.setContentText("Transfer complete")
             .setProgress(0, 0, false)
             .setOngoing(false)
+            .setAutoCancel(true)
+            .setTimeoutAfter(3000)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
     } else if (failed) {
         builder.setContentText("Transfer failed")
@@ -1249,6 +1251,8 @@ fun MainActivity.showSendingNotification(fileName: String, progress: Float?, com
         builder.setContentText("Transfer complete")
             .setProgress(0, 0, false)
             .setOngoing(false)
+            .setAutoCancel(true)
+            .setTimeoutAfter(3000)
             .setSmallIcon(android.R.drawable.stat_sys_upload_done)
     } else if (failed) {
         builder.setContentText("Transfer failed")
